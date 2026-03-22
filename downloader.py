@@ -5,6 +5,8 @@ import logging
 from pathlib import Path
 from typing import Optional, Tuple
 import re
+import httpx
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,57 @@ def detect_platform(url: str) -> Optional[str]:
     return None
 
 
+async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
+    """Скачиваем Twitter видео через ssstwitter.com"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": "https://ssstwitter.com/",
+        "Origin": "https://ssstwitter.com",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            # Получаем страницу с прямой ссылкой
+            r = await client.post(
+                "https://ssstwitter.com/",
+                data={"id": url, "locale": "ru", "tt": "", "ts": "", "source": "form"},
+            )
+            r.raise_for_status()
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            # Ищем ссылку на видео
+            video_url = None
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if "video" in href and ("mp4" in href or "cdn" in href or "twimg" in href):
+                    video_url = href
+                    break
+
+            if not video_url:
+                # Пробуем найти через тег video
+                video = soup.find("video")
+                if video:
+                    video_url = video.get("src") or (video.find("source") or {}).get("src")
+
+            if not video_url:
+                return None, "Не удалось найти видео в твите."
+
+            # Скачиваем видео
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepath = os.path.join(tmpdir, "twitter_video.mp4")
+
+            async with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                with open(filepath, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        f.write(chunk)
+
+            return filepath, None
+
+    except Exception as e:
+        logger.error("SSS Twitter error: %s", e)
+        return None, str(e)
+
+
 async def download_media(
     url: str,
     quality: str = "best",
@@ -40,6 +93,12 @@ async def download_media(
 ) -> Tuple[Optional[str], Optional[str]]:
     tmpdir = tempfile.mkdtemp(prefix="tgbot_")
     output_template = os.path.join(tmpdir, "%(title).50s.%(ext)s")
+
+    platform = detect_platform(url)
+
+    # Twitter — используем ssstwitter
+    if platform == "twitter" and not audio_only:
+        return await download_twitter_via_sss(url)
 
     cmd = [
         "yt-dlp",
@@ -59,17 +118,11 @@ async def download_media(
             "--merge-output-format", "mp4",
         ]
 
-    platform = detect_platform(url)
-
     if platform == "instagram":
         cmd += ["--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
 
     if platform == "pixiv":
         cmd += ["--add-header", "Referer:https://www.pixiv.net/"]
-
-    if platform == "twitter":
-        cmd += ["--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
-        cmd += ["--extractor-args", "twitter:api=graphql"]
 
     cmd.append(url)
 
