@@ -92,71 +92,73 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            data = {}
 
-            # Пробуем redvid.io
-            try:
-                r = await client.get(
-                    "https://redvid.io/api",
-                    params={"url": url},
-                    headers={
+            # Пробуем redvid.io с правильным endpoint
+            for endpoint in [
+                f"https://redvid.io/?url={url}",
+                f"https://redvid.io/download?url={url}",
+                f"https://redvid.io/get?url={url}",
+            ]:
+                try:
+                    r = await client.get(endpoint, headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                         "Accept": "application/json",
                         "Referer": "https://redvid.io/",
-                    }
-                )
-                logger.info("Redvid status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
-                logger.info("Redvid response: %s", r.text[:500])
-                if r.status_code == 200 and "application/json" in r.headers.get("content-type", ""):
-                    data = r.json()
-                    logger.info("Redvid data: %s", data)
-            except Exception as e:
-                logger.warning("Redvid failed: %s", e)
-                data = {}
+                        "X-Requested-With": "XMLHttpRequest",
+                    })
+                    logger.info("Redvid %s status: %s ct: %s body: %s", endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
+                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                        data = r.json()
+                        break
+                except Exception as e:
+                    logger.warning("Redvid endpoint %s failed: %s", endpoint, e)
 
-            # Пробуем viddit.io если redvid не дал результат
+            # Пробуем viddit.io
             if not data:
-                try:
-                    r2 = await client.get(
-                        "https://viddit.io/api",
-                        params={"url": url},
-                        headers={
+                for endpoint in [
+                    f"https://viddit.io/?url={url}",
+                    f"https://viddit.io/api?url={url}",
+                    f"https://viddit.io/download?url={url}",
+                ]:
+                    try:
+                        r = await client.get(endpoint, headers={
                             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                             "Accept": "application/json",
                             "Referer": "https://viddit.io/",
-                        }
-                    )
-                    logger.info("Viddit status: %s content-type: %s", r2.status_code, r2.headers.get("content-type"))
-                    logger.info("Viddit response: %s", r2.text[:500])
-                    if r2.status_code == 200:
-                        data = r2.json()
-                        logger.info("Viddit data: %s", data)
-                except Exception as e:
-                    logger.warning("Viddit failed: %s", e)
-                    data = {}
+                            "X-Requested-With": "XMLHttpRequest",
+                        })
+                        logger.info("Viddit %s status: %s ct: %s body: %s", endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
+                        if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                            data = r.json()
+                            break
+                    except Exception as e:
+                        logger.warning("Viddit endpoint %s failed: %s", endpoint, e)
 
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
             media_urls = []
             if isinstance(data, list):
-                media_urls = data
+                media_urls = [x if isinstance(x, str) else x.get("url", "") for x in data]
             elif isinstance(data, dict):
-                for key in ["url", "video", "image", "images", "media", "urls", "hd", "sd"]:
+                for key in ["url", "video", "image", "images", "media", "urls", "hd", "sd", "link"]:
                     val = data.get(key)
                     if isinstance(val, str) and val.startswith("http"):
                         media_urls.append(val)
                     elif isinstance(val, list):
-                        media_urls.extend(val)
+                        for v in val:
+                            if isinstance(v, str):
+                                media_urls.append(v)
+                            elif isinstance(v, dict):
+                                media_urls.append(v.get("url", ""))
 
             logger.info("Media urls found: %s", media_urls)
 
             for i, media_url in enumerate(media_urls[:10]):
-                if isinstance(media_url, dict):
-                    media_url = media_url.get("url", "")
                 if not media_url or not media_url.startswith("http"):
                     continue
                 ext = media_url.split(".")[-1].split("?")[0]
@@ -171,14 +173,14 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                         filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Не удалось найти медиа в посте Reddit."
+                return None, "Не удалось найти медиа в посте Reddit — все сервисы заблокированы."
 
             return "|||".join(filepaths), None
 
     except Exception as e:
         logger.error("Reddit download error: %s", e)
         return None, f"Ошибка Reddit: {e}"
-
+        
 async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         artwork_id = re.search(r"artworks/(\d+)", url)
