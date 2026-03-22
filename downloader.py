@@ -33,6 +33,28 @@ def detect_platform(url: str) -> Optional[str]:
     return None
 
 
+async def get_video_dimensions(filepath: str) -> Tuple[int, int]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0",
+            filepath,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
+        out = stdout.decode().strip()
+        if out:
+            parts = out.split(",")
+            if len(parts) == 2:
+                return int(parts[0]), int(parts[1])
+    except Exception as e:
+        logger.warning("ffprobe error: %s", e)
+    return 0, 0
+
+
 async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         tweet_id = re.search(r"status/(\d+)", url)
