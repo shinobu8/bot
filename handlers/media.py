@@ -114,7 +114,7 @@ async def handle_url(message: Message):
 
                 elif is_image:
                     raw = file_path.read_bytes()
-                    processed = process_image_bytes(raw, blur_radius=blur_radius)
+                    processed = process_image_bytes(raw, blur_radius=blur_radius, compress=True)
                     media_group.append(
                         InputMediaPhoto(media=BufferedInputFile(processed, filename="photo.jpg"))
                     )
@@ -135,8 +135,11 @@ async def handle_url(message: Message):
                         )
                     )
 
+            # Отправляем чанками по 10 (лимит Telegram)
             if media_group:
-                await message.reply_media_group(media_group)
+                for chunk_start in range(0, len(media_group), 10):
+                    chunk = media_group[chunk_start:chunk_start + 10]
+                    await message.reply_media_group(chunk)
 
             has_video = any(
                 Path(fp).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
