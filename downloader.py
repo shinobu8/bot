@@ -95,68 +95,71 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            data = {}
+            # Шаг 1: получаем страницу redvid.io и вытаскиваем токен
+            r = await client.get(
+                "https://redvid.io/",
+                params={"url": url},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://redvid.io/",
+                }
+            )
+            logger.info("Redvid page status: %s", r.status_code)
 
-            # Пробуем redvid.io с правильным endpoint
-            for endpoint in [
-                f"https://redvid.io/?url={url}",
-                f"https://redvid.io/download?url={url}",
-                f"https://redvid.io/get?url={url}",
-            ]:
-                try:
-                    r = await client.get(endpoint, headers={
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            # Ищем токен в форме или скриптах
+            token = None
+            for inp in soup.find_all("input", {"name": ["token", "_token", "download_token", "t"]}):
+                token = inp.get("value")
+                if token:
+                    break
+
+            # Ищем прямые ссылки на видео/фото в HTML
+            media_urls = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if any(x in href for x in ["v.redd.it", "i.redd.it", ".mp4", "preview.redd.it"]):
+                    media_urls.append(href)
+
+            # Ищем в тегах video/img
+            for tag in soup.find_all(["video", "source"]):
+                src = tag.get("src") or tag.get("data-src")
+                if src and src.startswith("http"):
+                    media_urls.append(src)
+
+            logger.info("Token: %s, Direct links: %s", token, media_urls)
+
+            # Шаг 2: если нашли токен — запрашиваем скачку
+            if token and not media_urls:
+                r2 = await client.get(
+                    "https://redvid.io/download",
+                    params={"token": token},
+                    headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Accept": "application/json",
                         "Referer": "https://redvid.io/",
+                        "Accept": "application/json",
                         "X-Requested-With": "XMLHttpRequest",
-                    })
-                    logger.info("Redvid %s status: %s ct: %s body: %s", endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
-                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
-                        data = r.json()
-                        break
-                except Exception as e:
-                    logger.warning("Redvid endpoint %s failed: %s", endpoint, e)
-
-            # Пробуем viddit.io
-            if not data:
-                for endpoint in [
-                    f"https://viddit.io/?url={url}",
-                    f"https://viddit.io/api?url={url}",
-                    f"https://viddit.io/download?url={url}",
-                ]:
+                    }
+                )
+                logger.info("Redvid download status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:300])
+                if r2.status_code == 200:
                     try:
-                        r = await client.get(endpoint, headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "Accept": "application/json",
-                            "Referer": "https://viddit.io/",
-                            "X-Requested-With": "XMLHttpRequest",
-                        })
-                        logger.info("Viddit %s status: %s ct: %s body: %s", endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
-                        if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
-                            data = r.json()
-                            break
-                    except Exception as e:
-                        logger.warning("Viddit endpoint %s failed: %s", endpoint, e)
+                        data = r2.json()
+                        for key in ["url", "video", "hd", "sd", "link"]:
+                            val = data.get(key)
+                            if isinstance(val, str) and val.startswith("http"):
+                                media_urls.append(val)
+                    except Exception:
+                        soup2 = BeautifulSoup(r2.text, "html.parser")
+                        for a in soup2.find_all("a", href=True):
+                            if any(x in a["href"] for x in [".mp4", "v.redd.it", "i.redd.it"]):
+                                media_urls.append(a["href"])
+
+            logger.info("Final media urls: %s", media_urls)
 
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
-
-            media_urls = []
-            if isinstance(data, list):
-                media_urls = [x if isinstance(x, str) else x.get("url", "") for x in data]
-            elif isinstance(data, dict):
-                for key in ["url", "video", "image", "images", "media", "urls", "hd", "sd", "link"]:
-                    val = data.get(key)
-                    if isinstance(val, str) and val.startswith("http"):
-                        media_urls.append(val)
-                    elif isinstance(val, list):
-                        for v in val:
-                            if isinstance(v, str):
-                                media_urls.append(v)
-                            elif isinstance(v, dict):
-                                media_urls.append(v.get("url", ""))
-
-            logger.info("Media urls found: %s", media_urls)
 
             for i, media_url in enumerate(media_urls[:10]):
                 if not media_url or not media_url.startswith("http"):
@@ -173,7 +176,7 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                         filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Не удалось найти медиа в посте Reddit — все сервисы заблокированы."
+                return None, "Reddit недоступен с этого сервера. Попробуй позже."
 
             return "|||".join(filepaths), None
 
