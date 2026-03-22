@@ -91,44 +91,38 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            r = await client.post(
+                "https://socialrails.com/api/reddit",
+                json={"url": url},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Referer": "https://socialrails.com/",
+                    "Origin": "https://socialrails.com",
+                }
+            )
+            logger.info("Socialrails status: %s ct: %s body: %s", r.status_code, r.headers.get("content-type"), r.text[:800])
 
-            # Разворачиваем короткую ссылку через fxreddit
-            fxurl = url.replace("reddit.com", "rxddit.com")
-            r = await client.get(fxurl, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-            })
-            logger.info("rxddit status: %s ct: %s", r.status_code, r.headers.get("content-type"))
-            logger.info("rxddit body: %s", r.text[:800])
-
-            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
-            filepaths = []
+            media_urls = []
 
             if "json" in r.headers.get("content-type", ""):
                 data = r.json()
-                media_urls = []
-                for key in ["url", "video", "hd", "sd", "image", "images"]:
+                logger.info("Socialrails JSON: %s", data)
+                for key in ["url", "video", "hd", "sd", "image", "images", "media", "links", "data"]:
                     val = data.get(key)
                     if isinstance(val, str) and val.startswith("http"):
                         media_urls.append(val)
                     elif isinstance(val, list):
                         for v in val:
-                            s = v if isinstance(v, str) else v.get("url", "")
-                            if s:
+                            s = v if isinstance(v, str) else (v.get("url") or v.get("link") or "")
+                            if s and s.startswith("http"):
                                 media_urls.append(s)
-            else:
-                # Парсим HTML — ищем og:video и og:image
-                soup = BeautifulSoup(r.text, "html.parser")
-                media_urls = []
-                for meta in soup.find_all("meta"):
-                    prop = meta.get("property", "") or meta.get("name", "")
-                    content = meta.get("content", "")
-                    if prop in ["og:video", "og:video:url", "og:image"] and content.startswith("http"):
-                        media_urls.append(content)
-                    if prop == "og:video:secure_url" and content.startswith("http"):
-                        media_urls.insert(0, content)
 
             logger.info("Media urls: %s", media_urls)
+
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepaths = []
 
             for i, media_url in enumerate(media_urls[:10]):
                 if not media_url or not media_url.startswith("http"):
