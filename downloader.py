@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional, Tuple
 import re
 import httpx
-from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -91,37 +90,36 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (compatible; TelegramMediaBot/1.0; +https://t.me/virtualkorzhbot)",
+            "Accept": "application/json",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
             # Разворачиваем короткую ссылку
-            resolved = str((await client.get(url)).url)
-            # Извлекаем путь поста без query string
+            resp = await client.get(url)
+            resolved = str(resp.url)
+            logger.info("Reddit resolved: %s", resolved)
+
             match = re.search(r"reddit\.com(/r/[^?#]+)", resolved)
             if not match:
                 return None, "Не удалось определить путь поста Reddit."
             post_path = match.group(1).rstrip("/")
 
-            # Пробуем несколько зеркал
-            mirrors = [
-                f"https://api.reddit.com{post_path}.json",
-                f"https://old.reddit.com{post_path}.json",
-            ]
+            # Небольшая задержка чтобы не получить 429
+            await asyncio.sleep(1)
 
-            data = None
-            for api_url in mirrors:
-                logger.info("Trying Reddit mirror: %s", api_url)
-                try:
-                    r = await client.get(api_url)
-                    if r.status_code == 200:
-                        data = r.json()
-                        break
-                except Exception:
-                    continue
+            api_url = f"https://api.reddit.com{post_path}.json"
+            logger.info("Reddit API url: %s", api_url)
 
-            if not data:
-                return None, "Reddit заблокировал запрос. Попробуй позже."
+            r = await client.get(api_url)
+            logger.info("Reddit API status: %s", r.status_code)
+
+            if r.status_code == 429:
+                await asyncio.sleep(3)
+                r = await client.get(api_url)
+
+            r.raise_for_status()
+            data = r.json()
 
             post = data[0]["data"]["children"][0]["data"]
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
@@ -184,20 +182,19 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
             return None, "Не удалось определить ID арта Pixiv."
         aid = artwork_id.group(1)
 
-        # Заголовки с Referer — обязательны для pximg.net
         pixiv_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.pixiv.net/",
         }
 
         async with httpx.AsyncClient(timeout=60, headers=pixiv_headers, follow_redirects=True) as client:
-            # Получаем список страниц через phixiv API
             r = await client.get(f"https://phixiv.net/api/info?id={aid}&language=en")
             r.raise_for_status()
             data = r.json()
-            logger.info("Phixiv data: %s", data)
+            logger.info("Phixiv keys: %s", list(data.keys()))
 
-            image_urls = data.get("image_urls", [])
+            # Правильное поле — image_proxy_urls
+            image_urls = data.get("image_proxy_urls") or data.get("image_urls") or []
 
             if not image_urls:
                 return None, "Phixiv не вернул изображения для этого арта."
@@ -211,19 +208,16 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
                     ext = "jpg"
                 filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
 
-                # Скачиваем с правильным Referer
                 async with client.stream("GET", img_url) as resp:
-                    logger.info("Pixiv image %s status: %s", img_url, resp.status_code)
+                    logger.info("Pixiv image %d status: %s", i, resp.status_code)
                     if resp.status_code == 200:
                         with open(filepath, "wb") as f:
                             async for chunk in resp.aiter_bytes(chunk_size=8192):
                                 f.write(chunk)
                         filepaths.append(filepath)
-                    else:
-                        logger.warning("Pixiv image %d failed: %s", i, resp.status_code)
 
             if not filepaths:
-                return None, "Не удалось скачать изображения — возможно арт заблокирован для анонимов."
+                return None, "Не удалось скачать изображения с Pixiv."
 
             return "|||".join(filepaths), None
 
