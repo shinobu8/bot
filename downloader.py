@@ -62,19 +62,14 @@ async def download_media(
     platform = detect_platform(url)
 
     if platform == "instagram":
-        cmd += [
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        ]
+        cmd += ["--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
+
     if platform == "pixiv":
-        cmd += [
-            "--add-header", "Referer:https://www.pixiv.net/",
-        ]
+        cmd += ["--add-header", "Referer:https://www.pixiv.net/"]
+
     if platform == "twitter":
-        cmd += [
-            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--extractor-args", "twitter:api=graphql",
-        ]
-        ]
+        cmd += ["--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
+        cmd += ["--extractor-args", "twitter:api=graphql"]
 
     cmd.append(url)
 
