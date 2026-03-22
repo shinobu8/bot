@@ -63,7 +63,6 @@ async def handle_url(message: Message):
 
     try:
         if len(filepaths) == 1:
-            # Один файл — отправляем как раньше
             fp = filepaths[0]
             file_path = Path(fp)
             ext = file_path.suffix.lower()
@@ -95,8 +94,9 @@ async def handle_url(message: Message):
                     await cleanup_file(audio_path)
 
         else:
-            # Несколько файлов — отправляем одной группой
             media_group = []
+            photo_buttons = []
+
             for i, fp in enumerate(filepaths):
                 file_path = Path(fp)
                 ext = file_path.suffix.lower()
@@ -110,6 +110,9 @@ async def handle_url(message: Message):
                     media_group.append(
                         InputMediaPhoto(media=BufferedInputFile(processed, filename="photo.jpg"))
                     )
+                    photo_buttons.append([
+                        InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
+                    ])
                 else:
                     media_group.append(
                         InputMediaVideo(media=FSInputFile(fp))
@@ -117,17 +120,17 @@ async def handle_url(message: Message):
 
             await message.reply_media_group(media_group)
 
-            # Кнопки "Файлом" для фото отдельным сообщением
-            photo_buttons = []
-            for i, fp in enumerate(filepaths):
-                file_path = Path(fp)
-                ext = file_path.suffix.lower()
-                if ext in {".jpg", ".jpeg", ".png", ".webp"}:
-                    cache_key = f"{user_id}_{file_path.name}"
-                    photo_buttons.append([
-                        InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
-                    ])
-                    
+            has_video = any(
+                Path(fp).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}
+                for fp in filepaths
+            )
+            if has_video:
+                audio_path, audio_error = await download_media(url, audio_only=True)
+                if audio_path and not audio_error:
+                    af = FSInputFile(audio_path)
+                    await message.reply_audio(af, caption="🎵 Аудио")
+                    await cleanup_file(audio_path)
+
             if photo_buttons:
                 kb = InlineKeyboardMarkup(inline_keyboard=photo_buttons)
                 await message.reply("📎 Скачать оригиналы:", reply_markup=kb)
