@@ -28,7 +28,11 @@ async def fetch_rule34(tags: str, limit: int) -> List[dict]:
             r = await client.get(url)
             r.raise_for_status()
             data = r.json()
-            return [p for p in (data or []) if p.get("file_url")]
+            if isinstance(data, dict):
+                data = data.get("post", []) or []
+            if isinstance(data, list):
+                return [p for p in data if isinstance(p, dict) and p.get("file_url")]
+            return []
     except Exception as e:
         logger.warning("Rule34 fetch error: %s", e)
         return []
@@ -45,14 +49,15 @@ async def fetch_danbooru(tags: str, limit: int) -> List[dict]:
             r.raise_for_status()
             data = r.json()
             if data:
-                logger.info("Danbooru sample keys: %s", list(data[0].keys())[:10])
+                logger.info("Danbooru sample: %s", {
+                    k: data[0].get(k)
+                    for k in ["id", "file_url", "large_file_url", "md5", "file_ext"]
+                })
             result = []
             for p in data:
-                file_url = (
-                    p.get("file_url") or
-                    p.get("large_file_url") or
-                    p.get("preview_file_url")
-                )
+                if not isinstance(p, dict):
+                    continue
+                file_url = p.get("file_url") or p.get("large_file_url")
                 if not file_url:
                     md5 = p.get("md5", "")
                     ext = p.get("file_ext", "jpg")
@@ -89,17 +94,12 @@ def is_image_url(url: str) -> bool:
 async def search_arts(tags: str, count: int, source: str) -> List[Tuple[str, str]]:
     tags_encoded = tags.strip().replace(" ", "+")
 
-    if source in ("gelbooru", "rule34"):
-        r34 = await fetch_rule34(tags_encoded, count)
-        dan = await fetch_danbooru(tags_encoded, count)
-        posts = r34 + dan
-    else:  # both
-        r34, dan = await asyncio.gather(
-            fetch_rule34(tags_encoded, count),
-            fetch_danbooru(tags_encoded, count),
-        )
-        posts = r34 + dan
-        random.shuffle(posts)
+    r34, dan = await asyncio.gather(
+        fetch_rule34(tags_encoded, count),
+        fetch_danbooru(tags_encoded, count),
+    )
+    posts = r34 + dan
+    random.shuffle(posts)
 
     seen = set()
     results = []
@@ -128,14 +128,13 @@ async def send_arts(message: Message, tags: str, count: int):
     user_id = message.from_user.id
     settings = get_user_settings(user_id)
     blur_radius = settings.get("blur", 0)
-    source = settings.get("source", "rule34")
 
     status = await message.reply(
         f"🔍 Ищу {count} арт(ов) по тегу <code>{tags}</code>...",
         parse_mode="HTML",
     )
 
-    results = await search_arts(tags, count, source)
+    results = await search_arts(tags, count, "both")
 
     if not results:
         await status.edit_text(
