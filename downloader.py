@@ -91,66 +91,64 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            # Шаг 1: получаем страницу и csrf токен
-            r = await client.get("https://redditsave.com/", headers={
+            # Получаем токен со страницы rapidsave
+            r = await client.get("https://rapidsave.com/", headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             })
             soup = BeautifulSoup(r.text, "html.parser")
+
+            # Ищем форму и токен
             csrf = None
             for inp in soup.find_all("input"):
-                if inp.get("name") in ["_token", "csrf", "token", "authenticity_token"]:
+                name = inp.get("name", "")
+                if name in ["_token", "csrf", "token", "authenticity_token"]:
                     csrf = inp.get("value")
                     break
-            logger.info("CSRF token: %s", csrf)
+            logger.info("Rapidsave CSRF: %s", csrf)
 
-            # Шаг 2: отправляем форму
+            # Отправляем запрос на /info с правильными заголовками
             form_data = {"url": url}
             if csrf:
                 form_data["_token"] = csrf
 
             r2 = await client.post(
-                "https://redditsave.com/info",
+                "https://rapidsave.com/info",
                 data=form_data,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://redditsave.com/",
-                    "Origin": "https://redditsave.com",
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "Accept": "application/json, text/javascript, */*",
+                    "Referer": "https://rapidsave.com/",
+                    "Origin": "https://rapidsave.com",
+                    "Accept": "application/json, text/javascript, */*; q=0.01",
                     "X-Requested-With": "XMLHttpRequest",
+                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
                 }
             )
-            logger.info("Redditsave status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:500])
+            logger.info("Rapidsave /info status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:800])
 
             media_urls = []
 
-            # Пробуем JSON
             if "json" in r2.headers.get("content-type", ""):
                 data = r2.json()
-                logger.info("JSON data: %s", data)
-                for key in ["url", "video", "hd", "sd", "image", "images", "links"]:
+                logger.info("JSON: %s", data)
+                for key in ["url", "video", "hd", "sd", "image", "images", "links", "data"]:
                     val = data.get(key)
                     if isinstance(val, str) and val.startswith("http"):
                         media_urls.append(val)
                     elif isinstance(val, list):
                         for v in val:
-                            if isinstance(v, str):
+                            if isinstance(v, str) and v.startswith("http"):
                                 media_urls.append(v)
                             elif isinstance(v, dict):
-                                u = v.get("url", "")
+                                u = v.get("url") or v.get("link") or ""
                                 if u:
                                     media_urls.append(u)
             else:
-                # Парсим HTML
                 soup2 = BeautifulSoup(r2.text, "html.parser")
                 for a in soup2.find_all("a", href=True):
                     href = a["href"]
-                    if any(x in href for x in [".mp4", "v.redd.it", "i.redd.it", ".jpg", ".png"]):
-                        media_urls.append(href)
-                for tag in soup2.find_all(["video", "source", "img"]):
-                    src = tag.get("src") or tag.get("data-src")
-                    if src and src.startswith("http"):
-                        media_urls.append(src)
+                    if any(x in href for x in [".mp4", "v.redd.it", "i.redd.it", ".jpg", ".png", ".gif"]):
+                        if href not in media_urls:
+                            media_urls.append(href)
 
             logger.info("Media urls: %s", media_urls)
 
