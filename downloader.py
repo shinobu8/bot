@@ -72,9 +72,8 @@ async def download_media(
     if platform == "twitter":
         cmd += [
             "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "--add-header", "Accept-Language:en-US,en;q=0.5",
-            "--extractor-args", "twitter:api=syndication",
+            "--extractor-args", "twitter:api=graphql",
+        ]
         ]
 
     cmd.append(url)
