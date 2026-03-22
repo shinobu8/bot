@@ -43,32 +43,64 @@ PLATFORM_EMOJIS = {
 }
 
 
-def media_keyboard(url: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📁 Файл (оригинал)", callback_data=f"dl:file:{url[:200]}"),
-            InlineKeyboardButton(text="🖼 Сжатое фото", callback_data=f"dl:photo:{url[:200]}"),
-        ],
-        [
-            InlineKeyboardButton(text="❌ Отмена", callback_data="dl:cancel"),
-        ],
-    ])
+
 
 
 @router.message(F.text.regexp(URL_RE))
 async def handle_url(message: Message):
     url = URL_RE.search(message.text).group(0)
     platform = detect_platform(url)
-    
     if not platform:
         return
 
     emoji = PLATFORM_EMOJIS.get(platform, "🌐")
-    await message.reply(
-        f"{emoji} — выбери формат:",
-        reply_markup=media_keyboard(url),
-    )
+    user_id = message.from_user.id
+    settings = get_user_settings(user_id)
+    blur_radius = settings.get("blur", 0)
 
+    status_msg = await message.reply(f"{emoji} Скачиваю...")
+
+    # Скачиваем видео
+    filepath, error = await download_media(url, audio_only=False)
+    if error or not filepath:
+        await status_msg.edit_text(f"❌ Ошибка: {error or 'Неизвестная ошибка'}")
+        return
+
+    file_path = Path(filepath)
+    ext = file_path.suffix.lower()
+    is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
+
+    await status_msg.edit_text("📤 Отправляю...")
+
+    try:
+        if is_image:
+            raw = file_path.read_bytes()
+            processed = process_image_bytes(raw, blur_radius=blur_radius)
+            await message.reply_photo(
+                BufferedInputFile(processed, filename="photo.jpg"),
+                caption="🖼 Фото",
+            )
+        else:
+            f = FSInputFile(filepath)
+            try:
+                await message.reply_video(f, caption="🎬 Видео")
+            except Exception:
+                await message.reply_document(f, caption="📁 Файл")
+
+            # Скачиваем аудио отдельно
+            audio_path, audio_error = await download_media(url, audio_only=True)
+            if audio_path and not audio_error:
+                af = FSInputFile(audio_path)
+                await message.reply_audio(af, caption="🎵 Аудио")
+                await cleanup_file(audio_path)
+
+    except Exception as e:
+        logger.exception("Media send error")
+        await status_msg.edit_text(f"❌ Ошибка при отправке: {e}")
+    finally:
+        await cleanup_file(filepath)
+
+    await status_msg.delete()
 
 @router.callback_query(F.data.startswith("dl:"))
 async def handle_download_callback(call: CallbackQuery, bot: Bot):
