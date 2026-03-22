@@ -10,7 +10,7 @@ from aiogram.types import (
     InputMediaPhoto, InputMediaVideo,
 )
 
-from downloader import download_media, detect_platform, cleanup_file, get_video_dimensions
+from downloader import download_media, detect_platform, cleanup_file
 from image_utils import process_image_bytes
 from storage import get_user_settings
 
@@ -77,17 +77,11 @@ async def handle_url(message: Message):
                         reply_markup=kb,
                     )
             else:
-                width, height = await get_video_dimensions(fp)
                 f = FSInputFile(fp)
                 try:
-                    await message.reply_video(
-                        f,
-                        supports_streaming=True,
-                        width=width or None,
-                        height=height or None,
-                    )
+                    await message.reply_video(f, supports_streaming=True)
                 except Exception:
-                    await message.reply_document(FSInputFile(fp))
+                    await message.reply_document(f)
 
                 audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
@@ -120,13 +114,10 @@ async def handle_url(message: Message):
                             InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
                         ])
                 else:
-                    width, height = await get_video_dimensions(fp)
                     media_group.append(
                         InputMediaVideo(
                             media=FSInputFile(fp),
                             supports_streaming=True,
-                            width=width or None,
-                            height=height or None,
                         )
                     )
 
