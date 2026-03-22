@@ -35,44 +35,55 @@ def detect_platform(url: str) -> Optional[str]:
 
 
 async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
-    """Скачиваем Twitter видео через ssstwitter.com"""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://ssstwitter.com/",
-        "Origin": "https://ssstwitter.com",
-    }
+    """Скачиваем Twitter медиа через fxtwitter API"""
     try:
+        # Извлекаем ID твита
+        tweet_id = re.search(r"status/(\d+)", url)
+        if not tweet_id:
+            return None, "Не удалось определить ID твита."
+        tid = tweet_id.group(1)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Получаем страницу с прямой ссылкой
-            r = await client.post(
-                "https://ssstwitter.com/",
-                data={"id": url, "locale": "ru", "tt": "", "ts": "", "source": "form"},
-            )
+            # fxtwitter отдаёт JSON с медиа
+            r = await client.get(f"https://api.fxtwitter.com/status/{tid}")
             r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
+            data = r.json()
 
-            # Ищем ссылку на видео
-            video_url = None
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if "video" in href and ("mp4" in href or "cdn" in href or "twimg" in href):
-                    video_url = href
-                    break
+            tweet = data.get("tweet", {})
+            media_list = tweet.get("media", {})
 
-            if not video_url:
-                # Пробуем найти через тег video
-                video = soup.find("video")
-                if video:
-                    video_url = video.get("src") or (video.find("source") or {}).get("src")
+            # Ищем видео
+            videos = media_list.get("videos", [])
+            photos = media_list.get("photos", [])
+            gifs = media_list.get("gifs", [])
 
-            if not video_url:
-                return None, "Не удалось найти видео в твите."
+            media_url = None
+            ext = "mp4"
 
-            # Скачиваем видео
+            if videos:
+                # Берём наилучшее качество
+                best = max(videos, key=lambda v: v.get("width", 0))
+                media_url = best.get("url")
+                ext = "mp4"
+            elif gifs:
+                media_url = gifs[0].get("url")
+                ext = "mp4"
+            elif photos:
+                media_url = photos[0].get("url")
+                ext = "jpg"
+
+            if not media_url:
+                return None, "В твите нет медиа (фото/видео/гифки)."
+
+            # Скачиваем файл
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
-            filepath = os.path.join(tmpdir, "twitter_video.mp4")
+            filepath = os.path.join(tmpdir, f"twitter_media.{ext}")
 
-            async with client.stream("GET", video_url) as resp:
+            async with client.stream("GET", media_url) as resp:
                 resp.raise_for_status()
                 with open(filepath, "wb") as f:
                     async for chunk in resp.aiter_bytes(chunk_size=8192):
@@ -81,8 +92,8 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
             return filepath, None
 
     except Exception as e:
-        logger.error("SSS Twitter error: %s", e)
-        return None, str(e)
+        logger.error("fxtwitter error: %s", e)
+        return None, f"Ошибка: {e}"
 
 
 async def download_media(
