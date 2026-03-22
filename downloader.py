@@ -90,75 +90,35 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        from RedDownloader import RedDownloader
 
-            # Пробуем несколько API endpoint'ов
-            attempts = [
-                ("GET", "https://socialrails.com/api/reddit", {"url": url}),
-                ("GET", "https://socialrails.com/download", {"url": url}),
-                ("POST", "https://socialrails.com/download", {"url": url}),
-                ("GET", "https://socialrails.com/api/download", {"url": url}),
-            ]
+        tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
-            data = {}
-            for method, endpoint, params in attempts:
-                try:
-                    if method == "GET":
-                        r = await client.get(endpoint, params=params, headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "Accept": "application/json",
-                            "Referer": "https://socialrails.com/",
-                        })
-                    else:
-                        r = await client.post(endpoint, data=params, headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "Accept": "application/json",
-                            "Referer": "https://socialrails.com/",
-                            "Origin": "https://socialrails.com",
-                        })
-                    logger.info("%s %s -> %s ct:%s body:%s", method, endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
-                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
-                        data = r.json()
-                        break
-                except Exception as e:
-                    logger.warning("Failed %s %s: %s", method, endpoint, e)
+        # Запускаем в отдельном потоке чтобы не блокировать бота
+        def _download():
+            try:
+                data = RedDownloader.Download(url, output=tmpdir, quality=720)
+                return data
+            except Exception as e:
+                return str(e)
 
-            media_urls = []
-            if data:
-                logger.info("Data: %s", data)
-                for key in ["url", "video", "hd", "sd", "image", "images", "media", "links", "data"]:
-                    val = data.get(key)
-                    if isinstance(val, str) and val.startswith("http"):
-                        media_urls.append(val)
-                    elif isinstance(val, list):
-                        for v in val:
-                            s = v if isinstance(v, str) else (v.get("url") or v.get("link") or "")
-                            if s and s.startswith("http"):
-                                media_urls.append(s)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _download)
 
-            logger.info("Media urls: %s", media_urls)
+        if isinstance(result, str):
+            return None, f"Ошибка RedDownloader: {result}"
 
-            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
-            filepaths = []
+        # Собираем все скачанные файлы
+        files = list(Path(tmpdir).iterdir())
+        if not files:
+            return None, "RedDownloader не скачал файлы."
 
-            for i, media_url in enumerate(media_urls[:10]):
-                if not media_url or not media_url.startswith("http"):
-                    continue
-                ext = media_url.split(".")[-1].split("?")[0]
-                if ext not in {"mp4", "jpg", "jpeg", "png", "gif", "webp"}:
-                    ext = "mp4" if ("v.redd.it" in media_url or ".mp4" in media_url) else "jpg"
-                filepath = os.path.join(tmpdir, f"reddit_{i}.{ext}")
-                async with client.stream("GET", media_url) as resp:
-                    if resp.status_code == 200:
-                        with open(filepath, "wb") as f:
-                            async for chunk in resp.aiter_bytes(chunk_size=8192):
-                                f.write(chunk)
-                        filepaths.append(filepath)
+        filepaths = [str(f) for f in files if f.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webp"}]
 
-            if not filepaths:
-                return None, "Не удалось найти медиа в посте Reddit."
+        if not filepaths:
+            return None, "Не найдено медиа файлов."
 
-            return "|||".join(filepaths), None
+        return "|||".join(filepaths), None
 
     except Exception as e:
         logger.error("Reddit download error: %s", e)
