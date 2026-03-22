@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 import re
 import httpx
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -92,64 +93,56 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://rapidsave.com/",
+            "Origin": "https://rapidsave.com",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Разворачиваем короткую ссылку
-            resp = await client.get(url)
-            resolved = str(resp.url)
-            logger.info("Reddit resolved: %s", resolved)
+            logger.info("Sending to rapidsave: %s", url)
 
-            # Отправляем на rapidsave
             r = await client.post(
-                "https://rapidsave.com/info",
-                data={"url": resolved},
+                "https://rapidsave.com/",
+                data={"url": url},
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                     "Referer": "https://rapidsave.com/",
                     "Origin": "https://rapidsave.com",
                     "Content-Type": "application/x-www-form-urlencoded",
+                    "X-Requested-With": "XMLHttpRequest",
                 }
             )
             r.raise_for_status()
-            data = r.json()
-            logger.info("Rapidsave response: %s", data)
+            logger.info("Rapidsave status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
+            logger.info("Rapidsave response: %s", r.text[:500])
 
+            soup = BeautifulSoup(r.text, "html.parser")
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            # Видео
-            video_url = data.get("sd") or data.get("hd")
-            # Фото
-            photo_urls = data.get("links", [])
+            download_links = []
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                if any(x in href for x in [".mp4", ".jpg", ".jpeg", ".png", ".gif", "v.redd.it", "i.redd.it", "preview.redd.it"]):
+                    download_links.append(href)
 
-            if video_url:
-                filepath = os.path.join(tmpdir, "reddit_video.mp4")
-                async with client.stream("GET", video_url) as resp:
-                    resp.raise_for_status()
-                    with open(filepath, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                filepaths.append(filepath)
+            for tag in soup.find_all(attrs={"data-url": True}):
+                download_links.append(tag["data-url"])
 
-            elif photo_urls:
-                for i, item in enumerate(photo_urls[:10]):
-                    img_url = item.get("url") if isinstance(item, dict) else item
-                    if not img_url:
-                        continue
-                    ext = img_url.split(".")[-1].split("?")[0]
-                    if ext not in {"jpg", "jpeg", "png", "gif", "webp"}:
-                        ext = "jpg"
-                    filepath = os.path.join(tmpdir, f"reddit_photo_{i}.{ext}")
-                    async with client.stream("GET", img_url) as resp:
-                        if resp.status_code == 200:
-                            with open(filepath, "wb") as f:
-                                async for chunk in resp.aiter_bytes(chunk_size=8192):
-                                    f.write(chunk)
-                            filepaths.append(filepath)
+            logger.info("Found links: %s", download_links)
+
+            for i, link in enumerate(download_links[:10]):
+                ext = link.split(".")[-1].split("?")[0]
+                if ext not in {"mp4", "jpg", "jpeg", "png", "gif", "webp"}:
+                    ext = "mp4" if ("v.redd.it" in link or ".mp4" in link) else "jpg"
+                filepath = os.path.join(tmpdir, f"reddit_{i}.{ext}")
+                async with client.stream("GET", link) as resp:
+                    if resp.status_code == 200:
+                        with open(filepath, "wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                f.write(chunk)
+                        filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Rapidsave не нашёл медиа в этом посте."
+                return None, "Не удалось найти медиа в посте Reddit."
 
             return "|||".join(filepaths), None
 
