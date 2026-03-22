@@ -1,5 +1,6 @@
 import re
 import logging
+import asyncio
 from pathlib import Path
 
 from aiogram import Router, F
@@ -10,7 +11,7 @@ from aiogram.types import (
     InputMediaPhoto, InputMediaVideo,
 )
 
-from downloader import download_media, detect_platform, cleanup_file
+from downloader import download_media, detect_platform, cleanup_file, get_video_dimensions
 from image_utils import process_image_bytes
 from storage import get_user_settings
 
@@ -77,13 +78,22 @@ async def handle_url(message: Message):
                         reply_markup=kb,
                     )
             else:
+                (width, height), (audio_path, audio_error) = await asyncio.gather(
+                    get_video_dimensions(fp),
+                    download_media(url, audio_only=True),
+                )
+
                 f = FSInputFile(fp)
                 try:
-                    await message.reply_video(f, supports_streaming=True)
+                    await message.reply_video(
+                        f,
+                        supports_streaming=True,
+                        width=width or None,
+                        height=height or None,
+                    )
                 except Exception:
-                    await message.reply_document(f)
+                    await message.reply_document(FSInputFile(fp))
 
-                audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
                     await message.reply_audio(FSInputFile(audio_path), caption="🎵 Аудио")
                     await cleanup_file(audio_path)
@@ -114,10 +124,13 @@ async def handle_url(message: Message):
                             InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
                         ])
                 else:
+                    width, height = await get_video_dimensions(fp)
                     media_group.append(
                         InputMediaVideo(
                             media=FSInputFile(fp),
                             supports_streaming=True,
+                            width=width or None,
+                            height=height or None,
                         )
                     )
 
