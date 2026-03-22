@@ -45,7 +45,7 @@ async def get_video_dimensions(filepath: str) -> Tuple[int, int]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=3)
         out = stdout.decode().strip()
         if out:
             parts = out.split(",")
