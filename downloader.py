@@ -35,7 +35,6 @@ def detect_platform(url: str) -> Optional[str]:
 
 
 async def get_video_dimensions(filepath: str) -> Tuple[int, int]:
-    """Получаем реальные размеры видео через ffprobe."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error",
@@ -46,7 +45,7 @@ async def get_video_dimensions(filepath: str) -> Tuple[int, int]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
         out = stdout.decode().strip()
         if out:
             parts = out.split(",")
@@ -187,7 +186,6 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
                 filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
 
                 async with client.stream("GET", img_url) as resp:
-                    logger.info("Pixiv image %d status: %s", i, resp.status_code)
                     if resp.status_code == 200:
                         with open(filepath, "wb") as f:
                             async for chunk in resp.aiter_bytes(chunk_size=8192):
@@ -240,8 +238,8 @@ async def download_media(
         cmd += [
             "-f", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "--merge-output-format", "mp4",
-            # Встраиваем метаданные чтобы Telegram знал размеры
             "--embed-metadata",
+            "--postprocessor-args", "ffmpeg:-movflags +faststart",
         ]
 
     if platform == "instagram":
