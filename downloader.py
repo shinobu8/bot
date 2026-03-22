@@ -92,24 +92,25 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
 
-        # Извлекаем полный путь из короткой ссылки через headers Location
         resolved = url
-        async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
-            r = await client.get(url, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            })
-            if r.status_code in (301, 302, 303, 307, 308):
-                location = r.headers.get("location", "")
-                if location:
-                    resolved = location.split("?")[0].rstrip("/")
-                    logger.info("Reddit redirected to: %s", resolved)
+        # Пробуем развернуть через несколько User-Agent
+        for ua in [
+            "RedditApp/2023.45.0 (Android)",
+            "python-requests/2.28.0",
+            "curl/7.88.1",
+        ]:
+            try:
+                async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                    r = await client.get(url, headers={"User-Agent": ua})
+                    candidate = str(r.url).split("?")[0].rstrip("/")
+                    if "/comments/" in candidate:
+                        resolved = candidate
+                        logger.info("Resolved with UA '%s': %s", ua, resolved)
+                        break
+            except Exception as e:
+                logger.warning("UA %s failed: %s", ua, e)
 
-        # Если редирект не сработал — пробуем извлечь из URL напрямую
-        if "/s/" in resolved:
-            logger.info("Short URL not resolved, trying with original: %s", url)
-            resolved = url
-
-        logger.info("Reddit final URL: %s", resolved)
+        logger.info("Final resolved: %s", resolved)
 
         tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
@@ -119,7 +120,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                 os.chdir(tmpdir)
                 data = RedDownloader.Download(resolved, quality=720)
                 os.chdir(old_dir)
-                logger.info("RedDownloader result: %s", data)
                 return data
             except Exception as e:
                 logger.error("RedDownloader error: %s", e)
@@ -140,8 +140,7 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         if not all_files:
             return None, "RedDownloader не скачал файлы."
 
-        filepaths = [str(f) for f in all_files]
-        return "|||".join(filepaths), None
+        return "|||".join(str(f) for f in all_files), None
 
     except Exception as e:
         logger.error("Reddit download error: %s", e)
