@@ -10,7 +10,7 @@ from aiogram.types import (
     InputMediaPhoto, InputMediaVideo,
 )
 
-from downloader import download_media, detect_platform, cleanup_file
+from downloader import download_media, detect_platform, cleanup_file, get_video_dimensions
 from image_utils import process_image_bytes
 from storage import get_user_settings
 
@@ -57,8 +57,7 @@ async def handle_url(message: Message):
             is_gif = ext == ".gif"
 
             if is_gif:
-                f = FSInputFile(fp)
-                await message.reply_animation(f)
+                await message.reply_animation(FSInputFile(fp))
 
             elif is_image:
                 raw = file_path.read_bytes()
@@ -78,16 +77,23 @@ async def handle_url(message: Message):
                         reply_markup=kb,
                     )
             else:
+                import asyncio
+                # Запускаем ffprobe и подготовку аудио параллельно
+                width, height = await get_video_dimensions(fp)
                 f = FSInputFile(fp)
                 try:
-                    await message.reply_video(f, supports_streaming=True)
+                    await message.reply_video(
+                        f,
+                        supports_streaming=True,
+                        width=width or None,
+                        height=height or None,
+                    )
                 except Exception:
-                    await message.reply_document(f)
+                    await message.reply_document(FSInputFile(fp))
 
                 audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
-                    af = FSInputFile(audio_path)
-                    await message.reply_audio(af, caption="🎵 Аудио")
+                    await message.reply_audio(FSInputFile(audio_path), caption="🎵 Аудио")
                     await cleanup_file(audio_path)
 
         else:
@@ -101,8 +107,7 @@ async def handle_url(message: Message):
                 is_gif = ext == ".gif"
 
                 if is_gif:
-                    f = FSInputFile(fp)
-                    await message.reply_animation(f)
+                    await message.reply_animation(FSInputFile(fp))
 
                 elif is_image:
                     raw = file_path.read_bytes()
@@ -117,10 +122,13 @@ async def handle_url(message: Message):
                             InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
                         ])
                 else:
+                    width, height = await get_video_dimensions(fp)
                     media_group.append(
                         InputMediaVideo(
                             media=FSInputFile(fp),
                             supports_streaming=True,
+                            width=width or None,
+                            height=height or None,
                         )
                     )
 
@@ -134,8 +142,7 @@ async def handle_url(message: Message):
             if has_video and not is_pixiv:
                 audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
-                    af = FSInputFile(audio_path)
-                    await message.reply_audio(af, caption="🎵 Аудио")
+                    await message.reply_audio(FSInputFile(audio_path), caption="🎵 Аудио")
                     await cleanup_file(audio_path)
 
             if photo_buttons:
