@@ -28,15 +28,6 @@ URL_RE = re.compile(
     re.IGNORECASE,
 )
 
-PLATFORM_EMOJIS = {
-    "youtube": "▶️ YouTube",
-    "tiktok": "🎵 TikTok",
-    "instagram": "📸 Instagram",
-    "twitter": "🐦 Twitter/X",
-    "reddit": "🤖 Reddit",
-    "pixiv": "🎨 Pixiv",
-}
-
 
 @router.message(F.text.regexp(URL_RE))
 async def handle_url(message: Message):
@@ -45,22 +36,17 @@ async def handle_url(message: Message):
     if not platform:
         return
 
-    emoji = PLATFORM_EMOJIS.get(platform, "🌐")
     user_id = message.from_user.id
     settings = get_user_settings(user_id)
     blur_radius = settings.get("blur", 0)
     is_pixiv = (platform == "pixiv")
 
-    status_msg = await message.reply(f"{emoji} Скачиваю...")
-
     filepath, error = await download_media(url, audio_only=False)
     if error or not filepath:
-        await status_msg.edit_text(f"❌ Ошибка: {error or 'Неизвестная ошибка'}")
+        await message.reply(f"❌ {error or 'Неизвестная ошибка'}", parse_mode="HTML")
         return
 
     filepaths = filepath.split("|||")
-
-    await status_msg.edit_text("📤 Отправляю...")
 
     try:
         if len(filepaths) == 1:
@@ -94,7 +80,12 @@ async def handle_url(message: Message):
             else:
                 f = FSInputFile(fp)
                 try:
-                    await message.reply_video(f)
+                    await message.reply_video(
+                        f,
+                        supports_streaming=True,
+                        width=0,
+                        height=0,
+                    )
                 except Exception:
                     await message.reply_document(f)
 
@@ -132,7 +123,7 @@ async def handle_url(message: Message):
                         ])
                 else:
                     media_group.append(
-                        InputMediaVideo(media=FSInputFile(fp))
+                        InputMediaVideo(media=FSInputFile(fp), supports_streaming=True)
                     )
 
             if media_group:
@@ -155,15 +146,10 @@ async def handle_url(message: Message):
 
     except Exception as e:
         logger.exception("Media send error")
-        await status_msg.edit_text(f"❌ Ошибка при отправке: {e}")
+        await message.reply(f"❌ Ошибка при отправке: {e}")
     finally:
         for fp in filepaths:
             await cleanup_file(fp)
-
-    try:
-        await status_msg.delete()
-    except Exception:
-        pass
 
 
 @router.callback_query(F.data.startswith("sendfile:"))
