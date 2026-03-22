@@ -93,19 +93,50 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json",
-            "Referer": "https://reddit.save.gg/",
-            "Origin": "https://reddit.save.gg",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            r = await client.get(
-                "https://reddit.save.gg/api/convert",
-                params={"url": url},
-            )
-            logger.info("SaveGG status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
-            logger.info("SaveGG response: %s", r.text[:500])
-            r.raise_for_status()
-            data = r.json()
+
+            # Пробуем redvid.io
+            try:
+                r = await client.get(
+                    "https://redvid.io/api",
+                    params={"url": url},
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "application/json",
+                        "Referer": "https://redvid.io/",
+                    }
+                )
+                logger.info("Redvid status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
+                logger.info("Redvid response: %s", r.text[:500])
+                if r.status_code == 200 and "application/json" in r.headers.get("content-type", ""):
+                    data = r.json()
+                    logger.info("Redvid data: %s", data)
+            except Exception as e:
+                logger.warning("Redvid failed: %s", e)
+                data = {}
+
+            # Пробуем viddit.io если redvid не дал результат
+            if not data:
+                try:
+                    r2 = await client.get(
+                        "https://viddit.io/api",
+                        params={"url": url},
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Accept": "application/json",
+                            "Referer": "https://viddit.io/",
+                        }
+                    )
+                    logger.info("Viddit status: %s content-type: %s", r2.status_code, r2.headers.get("content-type"))
+                    logger.info("Viddit response: %s", r2.text[:500])
+                    if r2.status_code == 200:
+                        data = r2.json()
+                        logger.info("Viddit data: %s", data)
+                except Exception as e:
+                    logger.warning("Viddit failed: %s", e)
+                    data = {}
 
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
@@ -114,19 +145,19 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
             if isinstance(data, list):
                 media_urls = data
             elif isinstance(data, dict):
-                for key in ["url", "video", "image", "images", "media", "urls"]:
+                for key in ["url", "video", "image", "images", "media", "urls", "hd", "sd"]:
                     val = data.get(key)
-                    if isinstance(val, str):
+                    if isinstance(val, str) and val.startswith("http"):
                         media_urls.append(val)
                     elif isinstance(val, list):
                         media_urls.extend(val)
 
-            logger.info("Media urls: %s", media_urls)
+            logger.info("Media urls found: %s", media_urls)
 
             for i, media_url in enumerate(media_urls[:10]):
                 if isinstance(media_url, dict):
                     media_url = media_url.get("url", "")
-                if not media_url:
+                if not media_url or not media_url.startswith("http"):
                     continue
                 ext = media_url.split(".")[-1].split("?")[0]
                 if ext not in {"mp4", "jpg", "jpeg", "png", "gif", "webp"}:
