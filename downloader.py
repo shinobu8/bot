@@ -91,8 +91,9 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
+        import glob
 
-        # Сначала разворачиваем короткую ссылку
+        # Разворачиваем короткую ссылку
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             r = await client.get(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -104,7 +105,11 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
 
         def _download():
             try:
-                data = RedDownloader.Download(resolved, output=tmpdir, quality=720)
+                # Меняем рабочую директорию чтобы файлы сохранялись в tmpdir
+                old_dir = os.getcwd()
+                os.chdir(tmpdir)
+                data = RedDownloader.Download(resolved, quality=720)
+                os.chdir(old_dir)
                 logger.info("RedDownloader result: %s", data)
                 return data
             except Exception as e:
