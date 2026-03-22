@@ -91,9 +91,7 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
-        import glob
 
-        # Разворачиваем короткую ссылку
         async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
             r = await client.get(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -105,12 +103,10 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
 
         def _download():
             try:
-                # Меняем рабочую директорию чтобы файлы сохранялись в tmpdir
                 old_dir = os.getcwd()
                 os.chdir(tmpdir)
                 data = RedDownloader.Download(resolved, quality=720)
                 os.chdir(old_dir)
-                logger.info("RedDownloader result: %s", data)
                 return data
             except Exception as e:
                 logger.error("RedDownloader error: %s", e)
@@ -122,20 +118,17 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         if isinstance(result, str):
             return None, f"Ошибка RedDownloader: {result}"
 
-        files = list(Path(tmpdir).iterdir())
-        logger.info("Downloaded files: %s", files)
+        # Ищем файлы рекурсивно во всех подпапках
+        all_files = []
+        for ext in ["*.mp4", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp"]:
+            all_files.extend(Path(tmpdir).rglob(ext))
 
-        if not files:
+        logger.info("Downloaded files (recursive): %s", all_files)
+
+        if not all_files:
             return None, "RedDownloader не скачал файлы."
 
-        filepaths = [
-            str(f) for f in files
-            if f.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webp"}
-        ]
-
-        if not filepaths:
-            return None, "Не найдено медиа файлов."
-
+        filepaths = [str(f) for f in all_files]
         return "|||".join(filepaths), None
 
     except Exception as e:
