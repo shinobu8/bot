@@ -93,24 +93,42 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         from RedDownloader import RedDownloader
 
         resolved = url
-        # Пробуем развернуть через несколько User-Agent
-        for ua in [
-            "RedditApp/2023.45.0 (Android)",
-            "python-requests/2.28.0",
-            "curl/7.88.1",
-        ]:
+
+        # Разворачиваем через unshorten.me
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                r = await client.get(
+                    f"https://unshorten.me/json/{url}",
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                data = r.json()
+                logger.info("Unshorten response: %s", data)
+                candidate = data.get("resolved_url", "")
+                if "/comments/" in candidate:
+                    resolved = candidate.split("?")[0].rstrip("/")
+        except Exception as e:
+            logger.warning("Unshorten failed: %s", e)
+
+        # Запасной — urlexpander
+        if "/s/" in resolved:
             try:
                 async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                    r = await client.get(url, headers={"User-Agent": ua})
-                    candidate = str(r.url).split("?")[0].rstrip("/")
+                    r = await client.get(
+                        f"https://api.longurl.org/v2/expand?url={url}&format=json",
+                        headers={"User-Agent": "Mozilla/5.0"}
+                    )
+                    data = r.json()
+                    logger.info("Longurl response: %s", data)
+                    candidate = data.get("long-url", "")
                     if "/comments/" in candidate:
-                        resolved = candidate
-                        logger.info("Resolved with UA '%s': %s", ua, resolved)
-                        break
+                        resolved = candidate.split("?")[0].rstrip("/")
             except Exception as e:
-                logger.warning("UA %s failed: %s", ua, e)
+                logger.warning("Longurl failed: %s", e)
 
         logger.info("Final resolved: %s", resolved)
+
+        if "/s/" in resolved:
+            return None, "Не удалось развернуть короткую ссылку Reddit. Попробуй отправить полную ссылку на пост."
 
         tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
