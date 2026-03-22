@@ -92,27 +92,14 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
 
-        resolved = url.split("?")[0].rstrip("/")
-
-        # Пробуем через пуш.gg который разворачивает Reddit ссылки
         if "/s/" in url:
-            try:
-                async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                    # Используем old.reddit.com — иногда пропускает
-                    old_url = url.replace("www.reddit.com", "old.reddit.com")
-                    r = await client.get(old_url, headers={
-                        "User-Agent": "RedditApp/2024.1.0",
-                        "Authorization": "Basic b2hYcG9xclpZdWIxa2c6",
-                    })
-                    candidate = str(r.url).split("?")[0].rstrip("/")
-                    if "/comments/" in candidate:
-                        resolved = candidate
-                        logger.info("Resolved via old.reddit: %s", resolved)
-            except Exception as e:
-                logger.warning("old.reddit failed: %s", e)
+            return None, (
+                "⚠️ Короткие ссылки Reddit не поддерживаются.\n\n"
+                "Открой пост в браузере и скопируй полную ссылку вида:\n"
+                "<code>https://reddit.com/r/название/comments/xxxxx/...</code>"
+            )
 
-        logger.info("Reddit final: %s", resolved)
-
+        resolved = url.split("?")[0].rstrip("/")
         tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
         def _download():
@@ -123,7 +110,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                 os.chdir(old_dir)
                 return data
             except Exception as e:
-                logger.error("RedDownloader error: %s", e)
                 return str(e)
 
         loop = asyncio.get_event_loop()
@@ -135,8 +121,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         all_files = []
         for ext in ["*.mp4", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp"]:
             all_files.extend(Path(tmpdir).rglob(ext))
-
-        logger.info("Files: %s", all_files)
 
         if not all_files:
             return None, "Не удалось скачать медиа."
