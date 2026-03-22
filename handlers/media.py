@@ -16,7 +16,6 @@ from storage import get_user_settings
 router = Router()
 logger = logging.getLogger(__name__)
 
-# Хранилище оригинальных байтов фото для кнопки "Файлом"
 _photo_cache: dict = {}
 
 URL_RE = re.compile(
@@ -57,46 +56,48 @@ async def handle_url(message: Message):
         await status_msg.edit_text(f"❌ Ошибка: {error or 'Неизвестная ошибка'}")
         return
 
-    file_path = Path(filepath)
-    ext = file_path.suffix.lower()
-    is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
+    filepaths = filepath.split("|||")
 
     await status_msg.edit_text("📤 Отправляю...")
 
     try:
-        if is_image:
-            raw = file_path.read_bytes()
-            processed = process_image_bytes(raw, blur_radius=blur_radius)
+        for fp in filepaths:
+            file_path = Path(fp)
+            ext = file_path.suffix.lower()
+            is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
 
-            # Сохраняем оригинал в кэш по ключу user_id
-            cache_key = str(user_id)
-            _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+            if is_image:
+                raw = file_path.read_bytes()
+                processed = process_image_bytes(raw, blur_radius=blur_radius)
+                cache_key = f"{user_id}_{file_path.name}"
+                _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{cache_key}"),
+                ]])
+                await message.reply_photo(
+                    BufferedInputFile(processed, filename="photo.jpg"),
+                    reply_markup=kb,
+                )
+            else:
+                f = FSInputFile(fp)
+                try:
+                    await message.reply_video(f)
+                except Exception:
+                    await message.reply_document(f)
 
-            kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{cache_key}"),
-            ]])
-            await message.reply_photo(
-                BufferedInputFile(processed, filename="photo.jpg"),
-                reply_markup=kb,
-            )
-        else:
-            f = FSInputFile(filepath)
-            try:
-                await message.reply_video(f, caption="🎬 Видео")
-            except Exception:
-                await message.reply_document(f, caption="📁 Файл")
-
-            audio_path, audio_error = await download_media(url, audio_only=True)
-            if audio_path and not audio_error:
-                af = FSInputFile(audio_path)
-                await message.reply_audio(af, caption="🎵 Аудио")
-                await cleanup_file(audio_path)
+                if len(filepaths) == 1:
+                    audio_path, audio_error = await download_media(url, audio_only=True)
+                    if audio_path and not audio_error:
+                        af = FSInputFile(audio_path)
+                        await message.reply_audio(af, caption="🎵 Аудио")
+                        await cleanup_file(audio_path)
 
     except Exception as e:
         logger.exception("Media send error")
         await status_msg.edit_text(f"❌ Ошибка при отправке: {e}")
     finally:
-        await cleanup_file(filepath)
+        for fp in filepaths:
+            await cleanup_file(fp)
 
     try:
         await status_msg.delete()
