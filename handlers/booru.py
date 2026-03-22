@@ -211,4 +211,41 @@ async def cmd_search(message: Message):
     if len(args) < 2 or not args[1].strip():
         await message.reply(
             "❌ Укажи теги!\n"
-            "Пр
+            "Пример: <code>/search ushiromiya_battler</code>",
+            parse_mode="HTML",
+        )
+        return
+    tags = args[1].strip()
+    await send_arts(message, tags, count=5)
+
+
+@router.message(Command("searchn"))
+async def cmd_searchn(message: Message):
+    args = message.text.split(maxsplit=2)
+
+    if len(args) < 3:
+        await message.reply(
+            "❌ Формат: <code>/searchn [число] [тег]</code>\n"
+            "Пример: <code>/searchn 3 ushiromiya_battler</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        count = int(args[1])
+    except ValueError:
+        await message.reply(
+            f"❌ <code>{args[1]}</code> не является числом!",
+            parse_mode="HTML",
+        )
+        return
+
+    if count < 1:
+        await message.reply("❌ Число должно быть не менее 1.")
+        return
+    if count > MAX_ARTS:
+        await message.reply(f"⚠️ Максимум {MAX_ARTS} артов за раз.")
+        count = MAX_ARTS
+
+    tags = args[2].strip()
+    await send_arts(message, tags, count=count)
