@@ -56,6 +56,45 @@ async def get_video_dimensions(filepath: str) -> Tuple[int, int]:
     return 0, 0
 
 
+async def download_tiktok_via_api(url: str) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            r = await client.post(
+                "https://www.tikwm.com/api/",
+                data={"url": url, "hd": 1},
+            )
+            r.raise_for_status()
+            data = r.json()
+            logger.info("TikWM response code: %s", data.get("code"))
+
+            if data.get("code") != 0:
+                return None, None  # Фолбэк на yt-dlp
+
+            video_data = data.get("data", {})
+            video_url = video_data.get("hdplay") or video_data.get("play")
+
+            if not video_url:
+                return None, None  # Фолбэк на yt-dlp
+
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepath = os.path.join(tmpdir, "tiktok.mp4")
+
+            async with client.stream("GET", video_url) as resp:
+                resp.raise_for_status()
+                with open(filepath, "wb") as f:
+                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                        f.write(chunk)
+
+            return filepath, None
+
+    except Exception as e:
+        logger.error("TikTok API error: %s", e)
+        return None, None  # Фолбэк на yt-dlp
+
+
 async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         tweet_id = re.search(r"status/(\d+)", url)
@@ -215,6 +254,12 @@ async def download_media(
 
     if platform == "twitter" and not audio_only:
         return await download_twitter_via_sss(url)
+
+    if platform == "tiktok" and not audio_only:
+        result, error = await download_tiktok_via_api(url)
+        if result:
+            return result, None
+        # Фолбэк на yt-dlp если API не сработал
 
     if platform == "reddit" and not audio_only:
         return await download_reddit(url)
