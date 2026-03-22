@@ -24,11 +24,13 @@ logger = logging.getLogger(__name__)
 # URL regex filter
 import re
 URL_RE = re.compile(
-    r"https?://(www\.)?"
-    r"(youtube\.com|youtu\.be|tiktok\.com|instagram\.com"
-    r"|twitter\.com|x\.com|reddit\.com|pixiv\.net)"
-    r"\S+",
+    r"https?://([a-z0-9\-]+\.)?"
+    r"(youtube\.com|youtu\.be|tiktok\.com|vm\.tiktok\.com"
+    r"|vt\.tiktok\.com|instagram\.com|twitter\.com|x\.com"
+    r"|reddit\.com|redd\.it|pixiv\.net)"
+    r"\S*",
     re.IGNORECASE,
+
 )
 
 PLATFORM_EMOJIS = {
