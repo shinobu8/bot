@@ -90,12 +90,14 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; TelegramMediaBot/1.0; +https://t.me/virtualkorzhbot)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        }
+        mobile_headers = {
+            "User-Agent": "Reddit/Version 2023.45.0/Android 13",
             "Accept": "application/json",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Разворачиваем короткую ссылку
             resp = await client.get(url)
             resolved = str(resp.url)
             logger.info("Reddit resolved: %s", resolved)
@@ -105,21 +107,28 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                 return None, "Не удалось определить путь поста Reddit."
             post_path = match.group(1).rstrip("/")
 
-            # Небольшая задержка чтобы не получить 429
             await asyncio.sleep(1)
 
-            api_url = f"https://api.reddit.com{post_path}.json"
-            logger.info("Reddit API url: %s", api_url)
+            mirrors = [
+                f"https://www.reddit.com{post_path}.json",
+                f"https://reddit.com{post_path}.json",
+            ]
 
-            r = await client.get(api_url)
-            logger.info("Reddit API status: %s", r.status_code)
+            data = None
+            for api_url in mirrors:
+                logger.info("Trying: %s", api_url)
+                try:
+                    r = await client.get(api_url, headers=mobile_headers)
+                    logger.info("Status: %s", r.status_code)
+                    if r.status_code == 200:
+                        data = r.json()
+                        break
+                except Exception as e:
+                    logger.warning("Mirror failed: %s", e)
+                    continue
 
-            if r.status_code == 429:
-                await asyncio.sleep(3)
-                r = await client.get(api_url)
-
-            r.raise_for_status()
-            data = r.json()
+            if not data:
+                return None, "Reddit заблокировал запрос с этого сервера. К сожалению, Reddit блокирует облачные серверы — попробуй скопировать прямую ссылку на фото/видео."
 
             post = data[0]["data"]["children"][0]["data"]
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
@@ -191,9 +200,7 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
             r = await client.get(f"https://phixiv.net/api/info?id={aid}&language=en")
             r.raise_for_status()
             data = r.json()
-            logger.info("Phixiv keys: %s", list(data.keys()))
 
-            # Правильное поле — image_proxy_urls
             image_urls = data.get("image_proxy_urls") or data.get("image_urls") or []
 
             if not image_urls:
@@ -204,7 +211,7 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
 
             for i, img_url in enumerate(image_urls[:10]):
                 ext = img_url.split(".")[-1].split("?")[0]
-                if ext not in {"jpg", "jpeg", "png", "gif", "webp"}:
+                if ext not in {"jpg", "jpeg", "png", "gif", "webp", "mp4"}:
                     ext = "jpg"
                 filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
 
