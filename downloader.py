@@ -70,10 +70,17 @@ async def download_media(
 
     # Instagram: cookies sometimes needed; try without first
     platform = detect_platform(url)
-    if platform == "instagram":
+      if platform == "instagram":
         cmd += ["--add-header", "User-Agent:Mozilla/5.0"]
     if platform == "pixiv":
         cmd += ["--add-header", "Referer:https://www.pixiv.net/"]
+    if platform == "twitter":
+        cmd += [
+            "--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "--add-header", "Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "--add-header", "Accept-Language:en-US,en;q=0.5",
+            "--extractor-args", "twitter:api=syndication",
+        ]
 
     cmd.append(url)
 
