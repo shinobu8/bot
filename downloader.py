@@ -3,7 +3,7 @@ import os
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 import re
 import httpx
 from bs4 import BeautifulSoup
@@ -90,13 +90,18 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
-        # Получаем JSON данные поста через Reddit API
-        api_url = url.rstrip("/") + ".json"
         headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)",
+            "User-Agent": "TelegramBot/1.0 (by /u/telegrambot)",
+            "Accept": "application/json",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            # Разворачиваем короткие ссылки типа /s/xxxxx
+            resolved = str((await client.get(url)).url)
+            logger.info("Reddit resolved URL: %s", resolved)
+
+            # Убираем query string и добавляем .json
+            api_url = resolved.split("?")[0].rstrip("/") + ".json"
             r = await client.get(api_url)
             r.raise_for_status()
             data = r.json()
@@ -160,7 +165,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
 
 async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
-        # Извлекаем ID арта
         artwork_id = re.search(r"artworks/(\d+)", url)
         if not artwork_id:
             return None, "Не удалось определить ID арта Pixiv."
@@ -172,32 +176,52 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Получаем данные арта через Pixiv API
-            r = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}/pages")
+            # Сначала пробуем получить страницу и вытащить превью
+            r = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}")
             r.raise_for_status()
             data = r.json()
 
             if data.get("error"):
                 return None, "Арт не найден или закрыт."
 
-            pages = data.get("body", [])
-            if not pages:
-                return None, "В арте нет изображений."
-
+            body = data.get("body", {})
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            for i, page in enumerate(pages[:10]):
-                img_url = page["urls"]["original"]
-                ext = img_url.split(".")[-1].split("?")[0]
-                filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
+            # Пробуем получить все страницы
+            try:
+                rp = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}/pages")
+                pages_data = rp.json()
+                if not pages_data.get("error") and pages_data.get("body"):
+                    for i, page in enumerate(pages_data["body"][:10]):
+                        img_url = page["urls"]["original"]
+                        ext = img_url.split(".")[-1].split("?")[0]
+                        filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
+                        async with client.stream("GET", img_url) as resp:
+                            if resp.status_code == 200:
+                                with open(filepath, "wb") as f:
+                                    async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                        f.write(chunk)
+                                filepaths.append(filepath)
+            except Exception:
+                pass
 
-                async with client.stream("GET", img_url) as resp:
-                    resp.raise_for_status()
-                    with open(filepath, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                filepaths.append(filepath)
+            # Если страницы не получились — берём превью из основного API
+            if not filepaths:
+                urls = body.get("urls", {})
+                img_url = urls.get("original") or urls.get("regular") or urls.get("small")
+                if img_url:
+                    ext = img_url.split(".")[-1].split("?")[0]
+                    filepath = os.path.join(tmpdir, f"pixiv_0.{ext}")
+                    async with client.stream("GET", img_url) as resp:
+                        if resp.status_code == 200:
+                            with open(filepath, "wb") as f:
+                                async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                    f.write(chunk)
+                            filepaths.append(filepath)
+
+            if not filepaths:
+                return None, "Не удалось скачать изображения с Pixiv. Возможно, арт закрыт или требует авторизации."
 
             return "|||".join(filepaths), None
 
