@@ -5,3 +5,4 @@ Pillow>=10.0.0
 beautifulsoup4>=4.12.0
 python-dotenv>=1.0.0
 lxml>=5.0.0
+reddownloader>=3.0.0
