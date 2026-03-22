@@ -90,73 +90,69 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            # Шаг 1: получаем страницу и csrf токен
+            r = await client.get("https://redditsave.com/", headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            soup = BeautifulSoup(r.text, "html.parser")
+            csrf = None
+            for inp in soup.find_all("input"):
+                if inp.get("name") in ["_token", "csrf", "token", "authenticity_token"]:
+                    csrf = inp.get("value")
+                    break
+            logger.info("CSRF token: %s", csrf)
 
-        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Шаг 1: получаем страницу redvid.io и вытаскиваем токен
-            r = await client.get(
-                "https://redvid.io/",
-                params={"url": url},
+            # Шаг 2: отправляем форму
+            form_data = {"url": url}
+            if csrf:
+                form_data["_token"] = csrf
+
+            r2 = await client.post(
+                "https://redditsave.com/info",
+                data=form_data,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://redvid.io/",
+                    "Referer": "https://redditsave.com/",
+                    "Origin": "https://redditsave.com",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json, text/javascript, */*",
+                    "X-Requested-With": "XMLHttpRequest",
                 }
             )
-            logger.info("Redvid page status: %s", r.status_code)
+            logger.info("Redditsave status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:500])
 
-            soup = BeautifulSoup(r.text, "html.parser")
-
-            # Ищем токен в форме или скриптах
-            token = None
-            for inp in soup.find_all("input", {"name": ["token", "_token", "download_token", "t"]}):
-                token = inp.get("value")
-                if token:
-                    break
-
-            # Ищем прямые ссылки на видео/фото в HTML
             media_urls = []
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if any(x in href for x in ["v.redd.it", "i.redd.it", ".mp4", "preview.redd.it"]):
-                    media_urls.append(href)
 
-            # Ищем в тегах video/img
-            for tag in soup.find_all(["video", "source"]):
-                src = tag.get("src") or tag.get("data-src")
-                if src and src.startswith("http"):
-                    media_urls.append(src)
+            # Пробуем JSON
+            if "json" in r2.headers.get("content-type", ""):
+                data = r2.json()
+                logger.info("JSON data: %s", data)
+                for key in ["url", "video", "hd", "sd", "image", "images", "links"]:
+                    val = data.get(key)
+                    if isinstance(val, str) and val.startswith("http"):
+                        media_urls.append(val)
+                    elif isinstance(val, list):
+                        for v in val:
+                            if isinstance(v, str):
+                                media_urls.append(v)
+                            elif isinstance(v, dict):
+                                u = v.get("url", "")
+                                if u:
+                                    media_urls.append(u)
+            else:
+                # Парсим HTML
+                soup2 = BeautifulSoup(r2.text, "html.parser")
+                for a in soup2.find_all("a", href=True):
+                    href = a["href"]
+                    if any(x in href for x in [".mp4", "v.redd.it", "i.redd.it", ".jpg", ".png"]):
+                        media_urls.append(href)
+                for tag in soup2.find_all(["video", "source", "img"]):
+                    src = tag.get("src") or tag.get("data-src")
+                    if src and src.startswith("http"):
+                        media_urls.append(src)
 
-            logger.info("Token: %s, Direct links: %s", token, media_urls)
-
-            # Шаг 2: если нашли токен — запрашиваем скачку
-            if token and not media_urls:
-                r2 = await client.get(
-                    "https://redvid.io/download",
-                    params={"token": token},
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Referer": "https://redvid.io/",
-                        "Accept": "application/json",
-                        "X-Requested-With": "XMLHttpRequest",
-                    }
-                )
-                logger.info("Redvid download status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:300])
-                if r2.status_code == 200:
-                    try:
-                        data = r2.json()
-                        for key in ["url", "video", "hd", "sd", "link"]:
-                            val = data.get(key)
-                            if isinstance(val, str) and val.startswith("http"):
-                                media_urls.append(val)
-                    except Exception:
-                        soup2 = BeautifulSoup(r2.text, "html.parser")
-                        for a in soup2.find_all("a", href=True):
-                            if any(x in a["href"] for x in [".mp4", "v.redd.it", "i.redd.it"]):
-                                media_urls.append(a["href"])
-
-            logger.info("Final media urls: %s", media_urls)
+            logger.info("Media urls: %s", media_urls)
 
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
@@ -176,7 +172,7 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                         filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Reddit недоступен с этого сервера. Попробуй позже."
+                return None, "Не удалось найти медиа в посте Reddit."
 
             return "|||".join(filepaths), None
 
