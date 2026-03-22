@@ -91,51 +91,39 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        }
-        mobile_headers = {
-            "User-Agent": "Reddit/Version 2023.45.0/Android 13",
-            "Accept": "application/json",
+            "Referer": "https://rapidsave.com/",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            # Разворачиваем короткую ссылку
             resp = await client.get(url)
             resolved = str(resp.url)
             logger.info("Reddit resolved: %s", resolved)
 
-            match = re.search(r"reddit\.com(/r/[^?#]+)", resolved)
-            if not match:
-                return None, "Не удалось определить путь поста Reddit."
-            post_path = match.group(1).rstrip("/")
+            # Отправляем на rapidsave
+            r = await client.post(
+                "https://rapidsave.com/info",
+                data={"url": resolved},
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://rapidsave.com/",
+                    "Origin": "https://rapidsave.com",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                }
+            )
+            r.raise_for_status()
+            data = r.json()
+            logger.info("Rapidsave response: %s", data)
 
-            await asyncio.sleep(1)
-
-            mirrors = [
-                f"https://www.reddit.com{post_path}.json",
-                f"https://reddit.com{post_path}.json",
-            ]
-
-            data = None
-            for api_url in mirrors:
-                logger.info("Trying: %s", api_url)
-                try:
-                    r = await client.get(api_url, headers=mobile_headers)
-                    logger.info("Status: %s", r.status_code)
-                    if r.status_code == 200:
-                        data = r.json()
-                        break
-                except Exception as e:
-                    logger.warning("Mirror failed: %s", e)
-                    continue
-
-            if not data:
-                return None, "Reddit заблокировал запрос с этого сервера. К сожалению, Reddit блокирует облачные серверы — попробуй скопировать прямую ссылку на фото/видео."
-
-            post = data[0]["data"]["children"][0]["data"]
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            if post.get("is_video"):
-                video_url = post["media"]["reddit_video"]["fallback_url"].split("?")[0]
+            # Видео
+            video_url = data.get("sd") or data.get("hd")
+            # Фото
+            photo_urls = data.get("links", [])
+
+            if video_url:
                 filepath = os.path.join(tmpdir, "reddit_video.mp4")
                 async with client.stream("GET", video_url) as resp:
                     resp.raise_for_status()
@@ -144,38 +132,24 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                             f.write(chunk)
                 filepaths.append(filepath)
 
-            elif post.get("is_gallery"):
-                items = post.get("gallery_data", {}).get("items", [])
-                media_meta = post.get("media_metadata", {})
-                for i, item in enumerate(items[:10]):
-                    media_id = item["media_id"]
-                    meta = media_meta.get(media_id, {})
-                    img_url = meta.get("s", {}).get("u", "").replace("&amp;", "&")
+            elif photo_urls:
+                for i, item in enumerate(photo_urls[:10]):
+                    img_url = item.get("url") if isinstance(item, dict) else item
                     if not img_url:
                         continue
-                    filepath = os.path.join(tmpdir, f"reddit_photo_{i}.jpg")
+                    ext = img_url.split(".")[-1].split("?")[0]
+                    if ext not in {"jpg", "jpeg", "png", "gif", "webp"}:
+                        ext = "jpg"
+                    filepath = os.path.join(tmpdir, f"reddit_photo_{i}.{ext}")
                     async with client.stream("GET", img_url) as resp:
-                        resp.raise_for_status()
-                        with open(filepath, "wb") as f:
-                            async for chunk in resp.aiter_bytes(chunk_size=8192):
-                                f.write(chunk)
-                    filepaths.append(filepath)
-
-            elif post.get("url", "").endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
-                img_url = post["url"]
-                filepath = os.path.join(tmpdir, "reddit_photo.jpg")
-                async with client.stream("GET", img_url) as resp:
-                    resp.raise_for_status()
-                    with open(filepath, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                filepaths.append(filepath)
-
-            else:
-                return None, "В посте нет медиа (фото/видео)."
+                        if resp.status_code == 200:
+                            with open(filepath, "wb") as f:
+                                async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                    f.write(chunk)
+                            filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Не удалось скачать медиа из поста."
+                return None, "Rapidsave не нашёл медиа в этом посте."
 
             return "|||".join(filepaths), None
 
