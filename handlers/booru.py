@@ -18,6 +18,35 @@ MAX_ARTS = 10
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"}
 
 
+async def fetch_safebooru(tags: str, limit: int) -> List[dict]:
+    url = (
+        f"https://safebooru.org/index.php?page=dapi&s=post&q=index&json=1"
+        f"&limit={limit * 3}&tags={tags}&pid={random.randint(0, 5)}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=HEADERS) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            data = r.json()
+            logger.info("Safebooru returned %d posts", len(data) if isinstance(data, list) else 0)
+            if isinstance(data, list):
+                result = []
+                for p in data:
+                    if not isinstance(p, dict):
+                        continue
+                    pid = p.get("id", "")
+                    directory = p.get("directory", "")
+                    image = p.get("image", "")
+                    if directory and image:
+                        file_url = f"https://safebooru.org/images/{directory}/{image}"
+                        result.append({"file_url": file_url, "id": pid, "source": "safebooru"})
+                return result
+            return []
+    except Exception as e:
+        logger.warning("Safebooru fetch error: %s", e)
+        return []
+
+
 async def fetch_rule34(tags: str, limit: int) -> List[dict]:
     url = (
         f"https://api.rule34.xxx/index.php?page=dapi&s=post&q=index&json=1"
@@ -48,11 +77,6 @@ async def fetch_danbooru(tags: str, limit: int) -> List[dict]:
             r = await client.get(url)
             r.raise_for_status()
             data = r.json()
-            if data:
-                logger.info("Danbooru sample: %s", {
-                    k: data[0].get(k)
-                    for k in ["id", "file_url", "large_file_url", "md5", "file_ext"]
-                })
             result = []
             for p in data:
                 if not isinstance(p, dict):
@@ -64,11 +88,7 @@ async def fetch_danbooru(tags: str, limit: int) -> List[dict]:
                     if md5 and ext in {"jpg", "jpeg", "png", "gif", "webp"}:
                         file_url = f"https://cdn.donmai.us/original/{md5[:2]}/{md5[2:4]}/{md5}.{ext}"
                 if file_url and is_image_url(file_url):
-                    result.append({
-                        "file_url": file_url,
-                        "id": p.get("id", ""),
-                        "source": "danbooru",
-                    })
+                    result.append({"file_url": file_url, "id": p.get("id", ""), "source": "danbooru"})
             logger.info("Danbooru found %d posts", len(result))
             return result
     except Exception as e:
@@ -94,11 +114,12 @@ def is_image_url(url: str) -> bool:
 async def search_arts(tags: str, count: int, source: str) -> List[Tuple[str, str]]:
     tags_encoded = tags.strip().replace(" ", "+")
 
-    r34, dan = await asyncio.gather(
+    safe, r34, dan = await asyncio.gather(
+        fetch_safebooru(tags_encoded, count),
         fetch_rule34(tags_encoded, count),
         fetch_danbooru(tags_encoded, count),
     )
-    posts = r34 + dan
+    posts = safe + r34 + dan
     random.shuffle(posts)
 
     seen = set()
@@ -113,6 +134,8 @@ async def search_arts(tags: str, count: int, source: str) -> List[Tuple[str, str
         src = p.get("source", "")
         if "danbooru" in src:
             post_url = f"https://danbooru.donmai.us/posts/{pid}"
+        elif "safebooru" in src:
+            post_url = f"https://safebooru.org/index.php?page=post&s=view&id={pid}"
         else:
             post_url = f"https://rule34.xxx/index.php?page=post&s=view&id={pid}"
 
