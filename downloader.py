@@ -3,7 +3,7 @@ import os
 import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import re
 import httpx
 from bs4 import BeautifulSoup
@@ -35,7 +35,6 @@ def detect_platform(url: str) -> Optional[str]:
 
 
 async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
-    """Скачиваем Twitter медиа через fxtwitter API"""
     try:
         tweet_id = re.search(r"status/(\d+)", url)
         if not tweet_id:
@@ -58,23 +57,18 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
             photos = media_list.get("photos", [])
             gifs = media_list.get("gifs", [])
 
-            # Собираем все медиа файлы
             all_media = []
-
             for video in videos:
                 best = max([video], key=lambda v: v.get("width", 0))
                 all_media.append({"url": best.get("url"), "ext": "mp4"})
-
             for gif in gifs:
                 all_media.append({"url": gif.get("url"), "ext": "mp4"})
-
             for photo in photos:
                 all_media.append({"url": photo.get("url"), "ext": "jpg"})
 
             if not all_media:
                 return None, "В твите нет медиа (фото/видео/гифки)."
 
-            # Скачиваем все файлы
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
@@ -87,12 +81,129 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
                             f.write(chunk)
                 filepaths.append(filepath)
 
-            # Возвращаем первый файл, остальные через разделитель
             return "|||".join(filepaths), None
 
     except Exception as e:
         logger.error("fxtwitter error: %s", e)
         return None, f"Ошибка: {e}"
+
+
+async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        # Получаем JSON данные поста через Reddit API
+        api_url = url.rstrip("/") + ".json"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)",
+        }
+
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            r = await client.get(api_url)
+            r.raise_for_status()
+            data = r.json()
+
+            post = data[0]["data"]["children"][0]["data"]
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepaths = []
+
+            # Видео
+            if post.get("is_video"):
+                video_url = post["media"]["reddit_video"]["fallback_url"].split("?")[0]
+                filepath = os.path.join(tmpdir, "reddit_video.mp4")
+                async with client.stream("GET", video_url) as resp:
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                filepaths.append(filepath)
+
+            # Галерея фото
+            elif post.get("is_gallery"):
+                items = post.get("gallery_data", {}).get("items", [])
+                media_meta = post.get("media_metadata", {})
+                for i, item in enumerate(items[:10]):
+                    media_id = item["media_id"]
+                    meta = media_meta.get(media_id, {})
+                    img_url = meta.get("s", {}).get("u", "").replace("&amp;", "&")
+                    if not img_url:
+                        continue
+                    filepath = os.path.join(tmpdir, f"reddit_photo_{i}.jpg")
+                    async with client.stream("GET", img_url) as resp:
+                        resp.raise_for_status()
+                        with open(filepath, "wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                f.write(chunk)
+                    filepaths.append(filepath)
+
+            # Одно фото
+            elif post.get("url", "").endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
+                img_url = post["url"]
+                filepath = os.path.join(tmpdir, "reddit_photo.jpg")
+                async with client.stream("GET", img_url) as resp:
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                filepaths.append(filepath)
+
+            else:
+                return None, "В посте нет медиа (фото/видео)."
+
+            if not filepaths:
+                return None, "Не удалось скачать медиа из поста."
+
+            return "|||".join(filepaths), None
+
+    except Exception as e:
+        logger.error("Reddit download error: %s", e)
+        return None, f"Ошибка Reddit: {e}"
+
+
+async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
+    try:
+        # Извлекаем ID арта
+        artwork_id = re.search(r"artworks/(\d+)", url)
+        if not artwork_id:
+            return None, "Не удалось определить ID арта Pixiv."
+        aid = artwork_id.group(1)
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.pixiv.net/",
+        }
+
+        async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
+            # Получаем данные арта через Pixiv API
+            r = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}/pages")
+            r.raise_for_status()
+            data = r.json()
+
+            if data.get("error"):
+                return None, "Арт не найден или закрыт."
+
+            pages = data.get("body", [])
+            if not pages:
+                return None, "В арте нет изображений."
+
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepaths = []
+
+            for i, page in enumerate(pages[:10]):
+                img_url = page["urls"]["original"]
+                ext = img_url.split(".")[-1].split("?")[0]
+                filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
+
+                async with client.stream("GET", img_url) as resp:
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                filepaths.append(filepath)
+
+            return "|||".join(filepaths), None
+
+    except Exception as e:
+        logger.error("Pixiv download error: %s", e)
+        return None, f"Ошибка Pixiv: {e}"
 
 
 async def download_media(
@@ -106,9 +217,14 @@ async def download_media(
 
     platform = detect_platform(url)
 
-    # Twitter — используем ssstwitter
     if platform == "twitter" and not audio_only:
         return await download_twitter_via_sss(url)
+
+    if platform == "reddit" and not audio_only:
+        return await download_reddit(url)
+
+    if platform == "pixiv" and not audio_only:
+        return await download_pixiv(url)
 
     cmd = [
         "yt-dlp",
@@ -130,9 +246,6 @@ async def download_media(
 
     if platform == "instagram":
         cmd += ["--add-header", "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"]
-
-    if platform == "pixiv":
-        cmd += ["--add-header", "Referer:https://www.pixiv.net/"]
 
     cmd.append(url)
 
