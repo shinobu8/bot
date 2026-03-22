@@ -37,7 +37,6 @@ def detect_platform(url: str) -> Optional[str]:
 async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[str]]:
     """Скачиваем Twitter медиа через fxtwitter API"""
     try:
-        # Извлекаем ID твита
         tweet_id = re.search(r"status/(\d+)", url)
         if not tweet_id:
             return None, "Не удалось определить ID твита."
@@ -48,7 +47,6 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # fxtwitter отдаёт JSON с медиа
             r = await client.get(f"https://api.fxtwitter.com/status/{tid}")
             r.raise_for_status()
             data = r.json()
@@ -56,40 +54,41 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
             tweet = data.get("tweet", {})
             media_list = tweet.get("media", {})
 
-            # Ищем видео
             videos = media_list.get("videos", [])
             photos = media_list.get("photos", [])
             gifs = media_list.get("gifs", [])
 
-            media_url = None
-            ext = "mp4"
+            # Собираем все медиа файлы
+            all_media = []
 
-            if videos:
-                # Берём наилучшее качество
-                best = max(videos, key=lambda v: v.get("width", 0))
-                media_url = best.get("url")
-                ext = "mp4"
-            elif gifs:
-                media_url = gifs[0].get("url")
-                ext = "mp4"
-            elif photos:
-                media_url = photos[0].get("url")
-                ext = "jpg"
+            for video in videos:
+                best = max([video], key=lambda v: v.get("width", 0))
+                all_media.append({"url": best.get("url"), "ext": "mp4"})
 
-            if not media_url:
+            for gif in gifs:
+                all_media.append({"url": gif.get("url"), "ext": "mp4"})
+
+            for photo in photos:
+                all_media.append({"url": photo.get("url"), "ext": "jpg"})
+
+            if not all_media:
                 return None, "В твите нет медиа (фото/видео/гифки)."
 
-            # Скачиваем файл
+            # Скачиваем все файлы
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
-            filepath = os.path.join(tmpdir, f"twitter_media.{ext}")
+            filepaths = []
 
-            async with client.stream("GET", media_url) as resp:
-                resp.raise_for_status()
-                with open(filepath, "wb") as f:
-                    async for chunk in resp.aiter_bytes(chunk_size=8192):
-                        f.write(chunk)
+            for i, media in enumerate(all_media):
+                filepath = os.path.join(tmpdir, f"twitter_media_{i}.{media['ext']}")
+                async with client.stream("GET", media["url"]) as resp:
+                    resp.raise_for_status()
+                    with open(filepath, "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                filepaths.append(filepath)
 
-            return filepath, None
+            # Возвращаем первый файл, остальные через разделитель
+            return "|||".join(filepaths), None
 
     except Exception as e:
         logger.error("fxtwitter error: %s", e)
