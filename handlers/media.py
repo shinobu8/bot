@@ -80,12 +80,7 @@ async def handle_url(message: Message):
             else:
                 f = FSInputFile(fp)
                 try:
-                    await message.reply_video(
-                        f,
-                        supports_streaming=True,
-                        width=0,
-                        height=0,
-                    )
+                    await message.reply_video(f, supports_streaming=True)
                 except Exception:
                     await message.reply_document(f)
 
