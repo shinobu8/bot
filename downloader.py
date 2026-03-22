@@ -92,14 +92,23 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
 
+        # Сначала разворачиваем короткую ссылку
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            r = await client.get(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            resolved = str(r.url).split("?")[0].rstrip("/")
+            logger.info("Reddit resolved: %s", resolved)
+
         tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
-        # Запускаем в отдельном потоке чтобы не блокировать бота
         def _download():
             try:
-                data = RedDownloader.Download(url, output=tmpdir, quality=720)
+                data = RedDownloader.Download(resolved, output=tmpdir, quality=720)
+                logger.info("RedDownloader result: %s", data)
                 return data
             except Exception as e:
+                logger.error("RedDownloader error: %s", e)
                 return str(e)
 
         loop = asyncio.get_event_loop()
@@ -108,12 +117,16 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         if isinstance(result, str):
             return None, f"Ошибка RedDownloader: {result}"
 
-        # Собираем все скачанные файлы
         files = list(Path(tmpdir).iterdir())
+        logger.info("Downloaded files: %s", files)
+
         if not files:
             return None, "RedDownloader не скачал файлы."
 
-        filepaths = [str(f) for f in files if f.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webp"}]
+        filepaths = [
+            str(f) for f in files
+            if f.suffix.lower() in {".mp4", ".jpg", ".jpeg", ".png", ".gif", ".webp"}
+        ]
 
         if not filepaths:
             return None, "Не найдено медиа файлов."
