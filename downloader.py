@@ -237,7 +237,7 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            for i, img_url in enumerate(image_urls[:10]):
+            for i, img_url in enumerate(image_urls):
                 ext = img_url.split(".")[-1].split("?")[0]
                 if ext not in {"jpg", "jpeg", "png", "gif", "webp", "mp4"}:
                     ext = "jpg"
