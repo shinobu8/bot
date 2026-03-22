@@ -179,7 +179,7 @@ async def send_arts(message: Message, tags: str, count: int):
         if not raw:
             continue
         try:
-            processed = process_image_bytes(raw, blur_radius=blur_radius)
+            processed = process_image_bytes(raw, blur_radius=blur_radius, compress=True) = process_image_bytes(raw, blur_radius=blur_radius)
             caption = f"🎨 {tags} [{i+1}/{len(results)}]\n<a href='{post_url}'>Источник</a>"
 
             if len(results) == 1:
