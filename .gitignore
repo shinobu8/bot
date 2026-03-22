@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+user_settings.json
+*.tmp
+/tmp/
