@@ -91,17 +91,19 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
-            "User-Agent": "TelegramBot/1.0 (by /u/telegrambot)",
-            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Разворачиваем короткие ссылки типа /s/xxxxx
+            # Разворачиваем короткую ссылку
             resolved = str((await client.get(url)).url)
-            logger.info("Reddit resolved URL: %s", resolved)
+            logger.info("Reddit resolved: %s", resolved)
 
-            # Убираем query string и добавляем .json
-            api_url = resolved.split("?")[0].rstrip("/") + ".json"
+            # Заменяем reddit.com на rxddit.com для обхода блокировки
+            rxddit_url = resolved.replace("www.reddit.com", "rxddit.com").replace("reddit.com", "rxddit.com")
+            api_url = rxddit_url.split("?")[0].rstrip("/") + ".json"
+            logger.info("Rxddit API url: %s", api_url)
+
             r = await client.get(api_url)
             r.raise_for_status()
             data = r.json()
@@ -110,7 +112,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            # Видео
             if post.get("is_video"):
                 video_url = post["media"]["reddit_video"]["fallback_url"].split("?")[0]
                 filepath = os.path.join(tmpdir, "reddit_video.mp4")
@@ -121,7 +122,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                             f.write(chunk)
                 filepaths.append(filepath)
 
-            # Галерея фото
             elif post.get("is_gallery"):
                 items = post.get("gallery_data", {}).get("items", [])
                 media_meta = post.get("media_metadata", {})
@@ -139,7 +139,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
                                 f.write(chunk)
                     filepaths.append(filepath)
 
-            # Одно фото
             elif post.get("url", "").endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
                 img_url = post["url"]
                 filepath = os.path.join(tmpdir, "reddit_photo.jpg")
@@ -176,52 +175,42 @@ async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Сначала пробуем получить страницу и вытащить превью
-            r = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}")
+            # Используем phixiv.net как прокси для получения изображений
+            r = await client.get(f"https://phixiv.net/api/info?id={aid}&language=en")
             r.raise_for_status()
             data = r.json()
 
-            if data.get("error"):
-                return None, "Арт не найден или закрыт."
+            image_urls = data.get("image_urls", [])
 
-            body = data.get("body", {})
+            if not image_urls:
+                # Запасной вариант — парсим страницу phixiv
+                rp = await client.get(f"https://phixiv.net/artworks/{aid}")
+                soup = BeautifulSoup(rp.text, "html.parser")
+                for img in soup.find_all("img"):
+                    src = img.get("src", "")
+                    if "i.pximg.net" in src or "pixiv" in src:
+                        image_urls.append(src)
+
+            if not image_urls:
+                return None, "Не удалось получить изображения с Pixiv."
+
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            # Пробуем получить все страницы
-            try:
-                rp = await client.get(f"https://www.pixiv.net/ajax/illust/{aid}/pages")
-                pages_data = rp.json()
-                if not pages_data.get("error") and pages_data.get("body"):
-                    for i, page in enumerate(pages_data["body"][:10]):
-                        img_url = page["urls"]["original"]
-                        ext = img_url.split(".")[-1].split("?")[0]
-                        filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
-                        async with client.stream("GET", img_url) as resp:
-                            if resp.status_code == 200:
-                                with open(filepath, "wb") as f:
-                                    async for chunk in resp.aiter_bytes(chunk_size=8192):
-                                        f.write(chunk)
-                                filepaths.append(filepath)
-            except Exception:
-                pass
-
-            # Если страницы не получились — берём превью из основного API
-            if not filepaths:
-                urls = body.get("urls", {})
-                img_url = urls.get("original") or urls.get("regular") or urls.get("small")
-                if img_url:
-                    ext = img_url.split(".")[-1].split("?")[0]
-                    filepath = os.path.join(tmpdir, f"pixiv_0.{ext}")
-                    async with client.stream("GET", img_url) as resp:
-                        if resp.status_code == 200:
-                            with open(filepath, "wb") as f:
-                                async for chunk in resp.aiter_bytes(chunk_size=8192):
-                                    f.write(chunk)
-                            filepaths.append(filepath)
+            for i, img_url in enumerate(image_urls[:10]):
+                ext = img_url.split(".")[-1].split("?")[0]
+                if ext not in {"jpg", "jpeg", "png", "gif", "webp"}:
+                    ext = "jpg"
+                filepath = os.path.join(tmpdir, f"pixiv_{i}.{ext}")
+                async with client.stream("GET", img_url) as resp:
+                    if resp.status_code == 200:
+                        with open(filepath, "wb") as f:
+                            async for chunk in resp.aiter_bytes(chunk_size=8192):
+                                f.write(chunk)
+                        filepaths.append(filepath)
 
             if not filepaths:
-                return None, "Не удалось скачать изображения с Pixiv. Возможно, арт закрыт или требует авторизации."
+                return None, "Не удалось скачать изображения с Pixiv."
 
             return "|||".join(filepaths), None
 
