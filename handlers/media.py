@@ -7,6 +7,7 @@ from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile, BufferedInputFile,
+    InputMediaPhoto, InputMediaVideo,
 )
 
 from downloader import download_media, detect_platform, cleanup_file
@@ -61,7 +62,9 @@ async def handle_url(message: Message):
     await status_msg.edit_text("📤 Отправляю...")
 
     try:
-        for fp in filepaths:
+        if len(filepaths) == 1:
+            # Один файл — отправляем как раньше
+            fp = filepaths[0]
             file_path = Path(fp)
             ext = file_path.suffix.lower()
             is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
@@ -85,12 +88,49 @@ async def handle_url(message: Message):
                 except Exception:
                     await message.reply_document(f)
 
-                if len(filepaths) == 1:
-                    audio_path, audio_error = await download_media(url, audio_only=True)
-                    if audio_path and not audio_error:
-                        af = FSInputFile(audio_path)
-                        await message.reply_audio(af, caption="🎵 Аудио")
-                        await cleanup_file(audio_path)
+                audio_path, audio_error = await download_media(url, audio_only=True)
+                if audio_path and not audio_error:
+                    af = FSInputFile(audio_path)
+                    await message.reply_audio(af, caption="🎵 Аудио")
+                    await cleanup_file(audio_path)
+
+        else:
+            # Несколько файлов — отправляем одной группой
+            media_group = []
+            for i, fp in enumerate(filepaths):
+                file_path = Path(fp)
+                ext = file_path.suffix.lower()
+                is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
+
+                if is_image:
+                    raw = file_path.read_bytes()
+                    processed = process_image_bytes(raw, blur_radius=blur_radius)
+                    cache_key = f"{user_id}_{file_path.name}"
+                    _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+                    media_group.append(
+                        InputMediaPhoto(media=BufferedInputFile(processed, filename="photo.jpg"))
+                    )
+                else:
+                    media_group.append(
+                        InputMediaVideo(media=FSInputFile(fp))
+                    )
+
+            await message.reply_media_group(media_group)
+
+            # Кнопки "Файлом" для фото отдельным сообщением
+            photo_buttons = []
+            for i, fp in enumerate(filepaths):
+                file_path = Path(fp)
+                ext = file_path.suffix.lower()
+                if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+                    cache_key = f"{user_id}_{file_path.name}"
+                    photo_buttons.append([
+                        InlineKeyboardButton(text=f"📁 Фото {i+1} файлом", callback_data=f"sendfile:{cache_key}"),
+                    ])
+
+            if photo_buttons:
+                kb = InlineKeyboardMarkup(inline_keyboard=photo_buttons)
+                await message.reply("📎 Скачать оригиналы:", reply_markup=kb)
 
     except Exception as e:
         logger.exception("Media send error")
