@@ -125,9 +125,9 @@ async def handle_url(message: Message):
                 if ext in {".jpg", ".jpeg", ".png", ".webp"}:
                     cache_key = f"{user_id}_{file_path.name}"
                     photo_buttons.append([
-                        InlineKeyboardButton(text=f"📁 Фото {i+1} файлом", callback_data=f"sendfile:{cache_key}"),
+                        InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
                     ])
-
+                    
             if photo_buttons:
                 kb = InlineKeyboardMarkup(inline_keyboard=photo_buttons)
                 await message.reply("📎 Скачать оригиналы:", reply_markup=kb)
