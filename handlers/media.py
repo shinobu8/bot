@@ -2,8 +2,7 @@ import re
 import logging
 from pathlib import Path
 
-from aiogram import Router, F, Bot
-from aiogram.filters import Command
+from aiogram import Router, F
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
@@ -16,6 +15,9 @@ from storage import get_user_settings
 
 router = Router()
 logger = logging.getLogger(__name__)
+
+# Хранилище оригинальных байтов фото для кнопки "Файлом"
+_photo_cache: dict = {}
 
 URL_RE = re.compile(
     r"https?://([a-z0-9\-]+\.)?"
@@ -65,12 +67,16 @@ async def handle_url(message: Message):
         if is_image:
             raw = file_path.read_bytes()
             processed = process_image_bytes(raw, blur_radius=blur_radius)
+
+            # Сохраняем оригинал в кэш по ключу user_id
+            cache_key = str(user_id)
+            _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+
             kb = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{filepath}"),
+                InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{cache_key}"),
             ]])
             await message.reply_photo(
                 BufferedInputFile(processed, filename="photo.jpg"),
-                caption="🖼 Фото",
                 reply_markup=kb,
             )
         else:
@@ -100,10 +106,17 @@ async def handle_url(message: Message):
 
 @router.callback_query(F.data.startswith("sendfile:"))
 async def send_as_file(call: CallbackQuery):
-    filepath = call.data.split(":", 1)[1]
+    cache_key = call.data.split(":", 1)[1]
+    cached = _photo_cache.get(cache_key)
+
+    if not cached:
+        await call.answer("❌ Файл устарел, отправь ссылку заново.", show_alert=True)
+        return
+
     await call.answer("📤 Отправляю файлом...")
     try:
-        f = FSInputFile(filepath)
-        await call.message.reply_document(f, caption="📁 Файл")
+        await call.message.reply_document(
+            BufferedInputFile(cached["bytes"], filename=cached["name"]),
+        )
     except Exception as e:
         await call.message.reply(f"❌ Ошибка: {e}")
