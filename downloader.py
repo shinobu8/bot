@@ -91,24 +91,41 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            r = await client.post(
-                "https://socialrails.com/api/reddit",
-                json={"url": url},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                    "Referer": "https://socialrails.com/",
-                    "Origin": "https://socialrails.com",
-                }
-            )
-            logger.info("Socialrails status: %s ct: %s body: %s", r.status_code, r.headers.get("content-type"), r.text[:800])
+
+            # Пробуем несколько API endpoint'ов
+            attempts = [
+                ("GET", "https://socialrails.com/api/reddit", {"url": url}),
+                ("GET", "https://socialrails.com/download", {"url": url}),
+                ("POST", "https://socialrails.com/download", {"url": url}),
+                ("GET", "https://socialrails.com/api/download", {"url": url}),
+            ]
+
+            data = {}
+            for method, endpoint, params in attempts:
+                try:
+                    if method == "GET":
+                        r = await client.get(endpoint, params=params, headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Accept": "application/json",
+                            "Referer": "https://socialrails.com/",
+                        })
+                    else:
+                        r = await client.post(endpoint, data=params, headers={
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "Accept": "application/json",
+                            "Referer": "https://socialrails.com/",
+                            "Origin": "https://socialrails.com",
+                        })
+                    logger.info("%s %s -> %s ct:%s body:%s", method, endpoint, r.status_code, r.headers.get("content-type"), r.text[:300])
+                    if r.status_code == 200 and "json" in r.headers.get("content-type", ""):
+                        data = r.json()
+                        break
+                except Exception as e:
+                    logger.warning("Failed %s %s: %s", method, endpoint, e)
 
             media_urls = []
-
-            if "json" in r.headers.get("content-type", ""):
-                data = r.json()
-                logger.info("Socialrails JSON: %s", data)
+            if data:
+                logger.info("Data: %s", data)
                 for key in ["url", "video", "hd", "sd", "image", "images", "media", "links", "data"]:
                     val = data.get(key)
                     if isinstance(val, str) and val.startswith("http"):
