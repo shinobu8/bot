@@ -49,6 +49,7 @@ async def handle_url(message: Message):
     user_id = message.from_user.id
     settings = get_user_settings(user_id)
     blur_radius = settings.get("blur", 0)
+    is_pixiv = (platform == "pixiv")
 
     status_msg = await message.reply(f"{emoji} Скачиваю...")
 
@@ -67,19 +68,29 @@ async def handle_url(message: Message):
             file_path = Path(fp)
             ext = file_path.suffix.lower()
             is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
+            is_gif = ext == ".gif"
 
-            if is_image:
+            if is_gif:
+                f = FSInputFile(fp)
+                await message.reply_animation(f)
+
+            elif is_image:
                 raw = file_path.read_bytes()
                 processed = process_image_bytes(raw, blur_radius=blur_radius)
-                cache_key = f"{user_id}_{file_path.name}"
-                _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
-                kb = InlineKeyboardMarkup(inline_keyboard=[[
-                    InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{cache_key}"),
-                ]])
-                await message.reply_photo(
-                    BufferedInputFile(processed, filename="photo.jpg"),
-                    reply_markup=kb,
-                )
+                if is_pixiv:
+                    await message.reply_photo(
+                        BufferedInputFile(processed, filename="photo.jpg"),
+                    )
+                else:
+                    cache_key = f"{user_id}_{file_path.name}"
+                    _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+                    kb = InlineKeyboardMarkup(inline_keyboard=[[
+                        InlineKeyboardButton(text="📁 Файлом", callback_data=f"sendfile:{cache_key}"),
+                    ]])
+                    await message.reply_photo(
+                        BufferedInputFile(processed, filename="photo.jpg"),
+                        reply_markup=kb,
+                    )
             else:
                 f = FSInputFile(fp)
                 try:
@@ -101,30 +112,37 @@ async def handle_url(message: Message):
                 file_path = Path(fp)
                 ext = file_path.suffix.lower()
                 is_image = ext in {".jpg", ".jpeg", ".png", ".webp"}
+                is_gif = ext == ".gif"
 
-                if is_image:
+                if is_gif:
+                    f = FSInputFile(fp)
+                    await message.reply_animation(f)
+
+                elif is_image:
                     raw = file_path.read_bytes()
                     processed = process_image_bytes(raw, blur_radius=blur_radius)
-                    cache_key = f"{user_id}_{file_path.name}"
-                    _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
                     media_group.append(
                         InputMediaPhoto(media=BufferedInputFile(processed, filename="photo.jpg"))
                     )
-                    photo_buttons.append([
-                        InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
-                    ])
+                    if not is_pixiv:
+                        cache_key = f"{user_id}_{file_path.name}"
+                        _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
+                        photo_buttons.append([
+                            InlineKeyboardButton(text="📁 Фото файлом", callback_data=f"sendfile:{cache_key}"),
+                        ])
                 else:
                     media_group.append(
                         InputMediaVideo(media=FSInputFile(fp))
                     )
 
-            await message.reply_media_group(media_group)
+            if media_group:
+                await message.reply_media_group(media_group)
 
             has_video = any(
-                Path(fp).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}
+                Path(fp).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
                 for fp in filepaths
             )
-            if has_video:
+            if has_video and not is_pixiv:
                 audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
                     af = FSInputFile(audio_path)
