@@ -92,43 +92,26 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         from RedDownloader import RedDownloader
 
-        resolved = url
+        resolved = url.split("?")[0].rstrip("/")
 
-        # Разворачиваем через unshorten.me
-        try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                r = await client.get(
-                    f"https://unshorten.me/json/{url}",
-                    headers={"User-Agent": "Mozilla/5.0"}
-                )
-                data = r.json()
-                logger.info("Unshorten response: %s", data)
-                candidate = data.get("resolved_url", "")
-                if "/comments/" in candidate:
-                    resolved = candidate.split("?")[0].rstrip("/")
-        except Exception as e:
-            logger.warning("Unshorten failed: %s", e)
-
-        # Запасной — urlexpander
-        if "/s/" in resolved:
+        # Пробуем через пуш.gg который разворачивает Reddit ссылки
+        if "/s/" in url:
             try:
                 async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-                    r = await client.get(
-                        f"https://api.longurl.org/v2/expand?url={url}&format=json",
-                        headers={"User-Agent": "Mozilla/5.0"}
-                    )
-                    data = r.json()
-                    logger.info("Longurl response: %s", data)
-                    candidate = data.get("long-url", "")
+                    # Используем old.reddit.com — иногда пропускает
+                    old_url = url.replace("www.reddit.com", "old.reddit.com")
+                    r = await client.get(old_url, headers={
+                        "User-Agent": "RedditApp/2024.1.0",
+                        "Authorization": "Basic b2hYcG9xclpZdWIxa2c6",
+                    })
+                    candidate = str(r.url).split("?")[0].rstrip("/")
                     if "/comments/" in candidate:
-                        resolved = candidate.split("?")[0].rstrip("/")
+                        resolved = candidate
+                        logger.info("Resolved via old.reddit: %s", resolved)
             except Exception as e:
-                logger.warning("Longurl failed: %s", e)
+                logger.warning("old.reddit failed: %s", e)
 
-        logger.info("Final resolved: %s", resolved)
-
-        if "/s/" in resolved:
-            return None, "Не удалось развернуть короткую ссылку Reddit. Попробуй отправить полную ссылку на пост."
+        logger.info("Reddit final: %s", resolved)
 
         tmpdir = tempfile.mkdtemp(prefix="tgbot_")
 
@@ -147,16 +130,16 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
         result = await loop.run_in_executor(None, _download)
 
         if isinstance(result, str):
-            return None, f"Ошибка RedDownloader: {result}"
+            return None, f"Ошибка: {result}"
 
         all_files = []
         for ext in ["*.mp4", "*.jpg", "*.jpeg", "*.png", "*.gif", "*.webp"]:
             all_files.extend(Path(tmpdir).rglob(ext))
 
-        logger.info("Downloaded files: %s", all_files)
+        logger.info("Files: %s", all_files)
 
         if not all_files:
-            return None, "RedDownloader не скачал файлы."
+            return None, "Не удалось скачать медиа."
 
         return "|||".join(str(f) for f in all_files), None
 
