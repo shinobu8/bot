@@ -91,69 +91,44 @@ async def download_twitter_via_sss(url: str) -> Tuple[Optional[str], Optional[st
 async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            # Получаем токен со страницы rapidsave
-            r = await client.get("https://rapidsave.com/", headers={
+
+            # Разворачиваем короткую ссылку через fxreddit
+            fxurl = url.replace("reddit.com", "rxddit.com")
+            r = await client.get(fxurl, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
             })
-            soup = BeautifulSoup(r.text, "html.parser")
+            logger.info("rxddit status: %s ct: %s", r.status_code, r.headers.get("content-type"))
+            logger.info("rxddit body: %s", r.text[:800])
 
-            # Ищем форму и токен
-            csrf = None
-            for inp in soup.find_all("input"):
-                name = inp.get("name", "")
-                if name in ["_token", "csrf", "token", "authenticity_token"]:
-                    csrf = inp.get("value")
-                    break
-            logger.info("Rapidsave CSRF: %s", csrf)
+            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
+            filepaths = []
 
-            # Отправляем запрос на /info с правильными заголовками
-            form_data = {"url": url}
-            if csrf:
-                form_data["_token"] = csrf
-
-            r2 = await client.post(
-                "https://rapidsave.com/info",
-                data=form_data,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Referer": "https://rapidsave.com/",
-                    "Origin": "https://rapidsave.com",
-                    "Accept": "application/json, text/javascript, */*; q=0.01",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                }
-            )
-            logger.info("Rapidsave /info status: %s ct: %s body: %s", r2.status_code, r2.headers.get("content-type"), r2.text[:800])
-
-            media_urls = []
-
-            if "json" in r2.headers.get("content-type", ""):
-                data = r2.json()
-                logger.info("JSON: %s", data)
-                for key in ["url", "video", "hd", "sd", "image", "images", "links", "data"]:
+            if "json" in r.headers.get("content-type", ""):
+                data = r.json()
+                media_urls = []
+                for key in ["url", "video", "hd", "sd", "image", "images"]:
                     val = data.get(key)
                     if isinstance(val, str) and val.startswith("http"):
                         media_urls.append(val)
                     elif isinstance(val, list):
                         for v in val:
-                            if isinstance(v, str) and v.startswith("http"):
-                                media_urls.append(v)
-                            elif isinstance(v, dict):
-                                u = v.get("url") or v.get("link") or ""
-                                if u:
-                                    media_urls.append(u)
+                            s = v if isinstance(v, str) else v.get("url", "")
+                            if s:
+                                media_urls.append(s)
             else:
-                soup2 = BeautifulSoup(r2.text, "html.parser")
-                for a in soup2.find_all("a", href=True):
-                    href = a["href"]
-                    if any(x in href for x in [".mp4", "v.redd.it", "i.redd.it", ".jpg", ".png", ".gif"]):
-                        if href not in media_urls:
-                            media_urls.append(href)
+                # Парсим HTML — ищем og:video и og:image
+                soup = BeautifulSoup(r.text, "html.parser")
+                media_urls = []
+                for meta in soup.find_all("meta"):
+                    prop = meta.get("property", "") or meta.get("name", "")
+                    content = meta.get("content", "")
+                    if prop in ["og:video", "og:video:url", "og:image"] and content.startswith("http"):
+                        media_urls.append(content)
+                    if prop == "og:video:secure_url" and content.startswith("http"):
+                        media_urls.insert(0, content)
 
             logger.info("Media urls: %s", media_urls)
-
-            tmpdir = tempfile.mkdtemp(prefix="tgbot_")
-            filepaths = []
 
             for i, media_url in enumerate(media_urls[:10]):
                 if not media_url or not media_url.startswith("http"):
