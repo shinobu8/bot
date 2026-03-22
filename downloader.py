@@ -92,51 +92,47 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Referer": "https://reddit.save.gg/",
+            "Origin": "https://reddit.save.gg",
         }
 
         async with httpx.AsyncClient(timeout=30, headers=headers, follow_redirects=True) as client:
-            # Разворачиваем короткую ссылку через saveredd.it
             r = await client.get(
-                "https://saveredd.it/",
+                "https://reddit.save.gg/api/convert",
                 params={"url": url},
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json, text/javascript, */*",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": "https://saveredd.it/",
-                }
             )
+            logger.info("SaveGG status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
+            logger.info("SaveGG response: %s", r.text[:500])
             r.raise_for_status()
-            logger.info("Saveredd status: %s content-type: %s", r.status_code, r.headers.get("content-type"))
-            logger.info("Saveredd response: %s", r.text[:500])
-
             data = r.json()
+
             tmpdir = tempfile.mkdtemp(prefix="tgbot_")
             filepaths = []
 
-            # Видео
-            video_url = data.get("video") or data.get("url")
-            # Фото
-            images = data.get("images") or data.get("photos") or []
+            media_urls = []
+            if isinstance(data, list):
+                media_urls = data
+            elif isinstance(data, dict):
+                for key in ["url", "video", "image", "images", "media", "urls"]:
+                    val = data.get(key)
+                    if isinstance(val, str):
+                        media_urls.append(val)
+                    elif isinstance(val, list):
+                        media_urls.extend(val)
 
-            if video_url and any(x in video_url for x in [".mp4", "v.redd.it"]):
-                filepath = os.path.join(tmpdir, "reddit_video.mp4")
-                async with client.stream("GET", video_url) as resp:
-                    resp.raise_for_status()
-                    with open(filepath, "wb") as f:
-                        async for chunk in resp.aiter_bytes(chunk_size=8192):
-                            f.write(chunk)
-                filepaths.append(filepath)
+            logger.info("Media urls: %s", media_urls)
 
-            for i, img in enumerate(images[:10]):
-                img_url = img if isinstance(img, str) else img.get("url", "")
-                if not img_url:
+            for i, media_url in enumerate(media_urls[:10]):
+                if isinstance(media_url, dict):
+                    media_url = media_url.get("url", "")
+                if not media_url:
                     continue
-                ext = img_url.split(".")[-1].split("?")[0]
-                if ext not in {"jpg", "jpeg", "png", "gif", "webp"}:
-                    ext = "jpg"
+                ext = media_url.split(".")[-1].split("?")[0]
+                if ext not in {"mp4", "jpg", "jpeg", "png", "gif", "webp"}:
+                    ext = "mp4" if ("v.redd.it" in media_url or ".mp4" in media_url) else "jpg"
                 filepath = os.path.join(tmpdir, f"reddit_{i}.{ext}")
-                async with client.stream("GET", img_url) as resp:
+                async with client.stream("GET", media_url) as resp:
                     if resp.status_code == 200:
                         with open(filepath, "wb") as f:
                             async for chunk in resp.aiter_bytes(chunk_size=8192):
@@ -151,7 +147,6 @@ async def download_reddit(url: str) -> Tuple[Optional[str], Optional[str]]:
     except Exception as e:
         logger.error("Reddit download error: %s", e)
         return None, f"Ошибка Reddit: {e}"
-
 
 async def download_pixiv(url: str) -> Tuple[Optional[str], Optional[str]]:
     try:
