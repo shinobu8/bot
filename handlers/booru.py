@@ -37,41 +37,37 @@ async def fetch_rule34(tags: str, limit: int) -> List[dict]:
 async def fetch_danbooru(tags: str, limit: int) -> List[dict]:
     url = (
         f"https://danbooru.donmai.us/posts.json"
-        f"?tags={tags}&limit={limit * 2}&page={random.randint(1, 5)}"
+        f"?tags={tags}&limit={limit * 2}&page={random.randint(1, 3)}"
     )
     try:
         async with httpx.AsyncClient(timeout=15, headers=HEADERS) as client:
             r = await client.get(url)
             r.raise_for_status()
             data = r.json()
+            if data:
+                logger.info("Danbooru sample keys: %s", list(data[0].keys())[:10])
             result = []
             for p in data:
-                file_url = p.get("file_url") or p.get("large_file_url")
-                if file_url:
-                    result.append({"file_url": file_url, "id": p.get("id", ""), "source": "danbooru"})
+                file_url = (
+                    p.get("file_url") or
+                    p.get("large_file_url") or
+                    p.get("preview_file_url")
+                )
+                if not file_url:
+                    md5 = p.get("md5", "")
+                    ext = p.get("file_ext", "jpg")
+                    if md5 and ext in {"jpg", "jpeg", "png", "gif", "webp"}:
+                        file_url = f"https://cdn.donmai.us/original/{md5[:2]}/{md5[2:4]}/{md5}.{ext}"
+                if file_url and is_image_url(file_url):
+                    result.append({
+                        "file_url": file_url,
+                        "id": p.get("id", ""),
+                        "source": "danbooru",
+                    })
+            logger.info("Danbooru found %d posts", len(result))
             return result
     except Exception as e:
         logger.warning("Danbooru fetch error: %s", e)
-        return []
-
-
-async def fetch_gelbooru(tags: str, limit: int) -> List[dict]:
-    # Используем публичный endpoint без авторизации
-    url = (
-        f"https://gelbooru.com/index.php?page=dapi&s=post&q=index&json=1"
-        f"&limit={limit * 3}&tags={tags}&pid={random.randint(0, 5)}&api_key=anonymous&user_id=0"
-    )
-    try:
-        async with httpx.AsyncClient(timeout=15, headers=HEADERS) as client:
-            r = await client.get(url)
-            if r.status_code == 401:
-                return []
-            r.raise_for_status()
-            data = r.json()
-            posts = data.get("post", []) if isinstance(data, dict) else data
-            return [p for p in posts if p.get("file_url")]
-    except Exception as e:
-        logger.warning("Gelbooru fetch error: %s", e)
         return []
 
 
@@ -93,20 +89,16 @@ def is_image_url(url: str) -> bool:
 async def search_arts(tags: str, count: int, source: str) -> List[Tuple[str, str]]:
     tags_encoded = tags.strip().replace(" ", "+")
 
-    if source == "gelbooru":
-        posts = await fetch_gelbooru(tags_encoded, count)
-        if not posts:
-            # Фолбэк на danbooru если gelbooru недоступен
-            posts = await fetch_danbooru(tags_encoded, count)
-    elif source == "rule34":
-        posts = await fetch_rule34(tags_encoded, count)
+    if source in ("gelbooru", "rule34"):
+        r34 = await fetch_rule34(tags_encoded, count)
+        dan = await fetch_danbooru(tags_encoded, count)
+        posts = r34 + dan
     else:  # both
-        gb, r34, dan = await asyncio.gather(
-            fetch_gelbooru(tags_encoded, count),
+        r34, dan = await asyncio.gather(
             fetch_rule34(tags_encoded, count),
             fetch_danbooru(tags_encoded, count),
         )
-        posts = gb + r34 + dan
+        posts = r34 + dan
         random.shuffle(posts)
 
     seen = set()
@@ -117,14 +109,12 @@ async def search_arts(tags: str, count: int, source: str) -> List[Tuple[str, str
             continue
         seen.add(url)
 
-        src = p.get("source", "")
         pid = p.get("id", "")
-        if "danbooru" in src or "danbooru" in url:
+        src = p.get("source", "")
+        if "danbooru" in src:
             post_url = f"https://danbooru.donmai.us/posts/{pid}"
-        elif "rule34" in url or "api.rule34" in src:
-            post_url = f"https://rule34.xxx/index.php?page=post&s=view&id={pid}"
         else:
-            post_url = f"https://gelbooru.com/index.php?page=post&s=view&id={pid}"
+            post_url = f"https://rule34.xxx/index.php?page=post&s=view&id={pid}"
 
         results.append((url, post_url))
         if len(results) >= count:
@@ -140,14 +130,17 @@ async def send_arts(message: Message, tags: str, count: int):
     blur_radius = settings.get("blur", 0)
     source = settings.get("source", "rule34")
 
-    status = await message.reply(f"🔍 Ищу {count} арт(ов) по тегу <code>{tags}</code>...", parse_mode="HTML")
+    status = await message.reply(
+        f"🔍 Ищу {count} арт(ов) по тегу <code>{tags}</code>...",
+        parse_mode="HTML",
+    )
 
     results = await search_arts(tags, count, source)
 
     if not results:
         await status.edit_text(
             f"😔 Ничего не найдено по тегу <code>{tags}</code>.\n"
-            "Проверь теги — они должны быть на английском, через пробел или +.",
+            "Проверь теги — они должны быть на английском.",
             parse_mode="HTML",
         )
         return
