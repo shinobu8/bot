@@ -41,6 +41,7 @@ async def handle_url(message: Message):
     settings = get_user_settings(user_id)
     blur_radius = settings.get("blur", 0)
     is_pixiv = (platform == "pixiv")
+    is_tiktok = (platform == "tiktok")
 
     filepath, error = await download_media(url, audio_only=False)
     if error or not filepath:
@@ -63,7 +64,7 @@ async def handle_url(message: Message):
             elif is_image:
                 raw = file_path.read_bytes()
                 processed = process_image_bytes(raw, blur_radius=blur_radius)
-                if is_pixiv:
+                if is_pixiv or is_tiktok:
                     await message.reply_photo(
                         BufferedInputFile(processed, filename="photo.jpg"),
                     )
@@ -117,7 +118,7 @@ async def handle_url(message: Message):
                     media_group.append(
                         InputMediaPhoto(media=BufferedInputFile(processed, filename="photo.jpg"))
                     )
-                    if not is_pixiv:
+                    if not is_pixiv and not is_tiktok:
                         cache_key = f"{user_id}_{file_path.name}"
                         _photo_cache[cache_key] = {"bytes": raw, "name": file_path.name}
                         photo_buttons.append([
@@ -141,7 +142,7 @@ async def handle_url(message: Message):
                 Path(fp).suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif"}
                 for fp in filepaths
             )
-            if has_video and not is_pixiv:
+            if has_video and not is_pixiv and not is_tiktok:
                 audio_path, audio_error = await download_media(url, audio_only=True)
                 if audio_path and not audio_error:
                     await message.reply_audio(FSInputFile(audio_path), caption="🎵 Аудио")
